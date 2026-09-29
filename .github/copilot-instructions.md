@@ -18,7 +18,7 @@ This is a crowdfunding platform for games with a developer theme. The applicatio
 
 #### Testing guidelines
 
-- **Always run unit tests and lint through the `quality-checks` skill — never invoke `npm run test:unit` or `npm run lint` directly.** The skill wraps environment setup, ordering, and troubleshooting. Run the Playwright E2E suite directly with `npm run test:e2e`. (Starting the app for manual validation is not a quality check — run `npm run dev` directly for that.)
+- **Always run unit tests, lint, and type checks through the `quality-checks` skill.** The skill wraps `npm run test:unit`, `npm run lint`, and `npm run typecheck:all` with environment setup, ordering, and troubleshooting. Run the Playwright E2E suite directly with `npm run test:e2e`. (Starting the app for manual validation is not a quality check — run `npm run dev` directly for that.)
 - Run Vitest unit tests to verify the data layer and transforms, and Playwright tests to verify e2e and frontend functionality
 - Run ESLint to check frontend code quality before committing
 - Review the existing tests to ensure we're not duplicating efforts
@@ -65,10 +65,10 @@ This is a crowdfunding platform for games with a developer theme. The applicatio
 - Make sure to explicitly set the workflow permissions
 - Add comments to document what tasks are being performed
 
-## Scripts
+## npm Commands
 
-- The project uses **npm scripts** for all development tasks — there is no `scripts/` directory.
-- **Skills take precedence.** Before running a command directly, check whether a skill covers the task (e.g. the `quality-checks` skill wraps unit tests and lint). If one applies, follow it.
+- Development commands are defined in `package.json`. They run Astro for the site and TypeScript tasks in `db/` for database setup.
+- **Skills take precedence.** Before running a command directly, check whether a skill covers the task (e.g. the `quality-checks` skill wraps unit tests, lint, and type checks). If one applies, follow it.
 - Key npm scripts:
   - `npm run dev` — start the Astro dev server (`predev` migrates + seeds the local SQLite database)
   - `npm run build` — build the static site (`prebuild` migrates + seeds the local SQLite database)
