@@ -75,6 +75,7 @@ This is a crowdfunding platform for games with a developer theme. The applicatio
   - `npm run preview` — serve the built `dist/` output
   - `npm run lint` — ESLint
   - `npm run test:unit` — Vitest unit tests
+  - `npm run test:demos` — five-scenario canvas provisioning/recovery, isolated fixture verification, and browser/accessibility tests using fake GitHub/session adapters; no remote mutations
   - `npm run test:e2e` — Playwright E2E tests (builds + previews first)
   - `npm run typecheck` — type-check the pure TypeScript with `tsgo` (TypeScript 7 native compiler, via `@typescript/native-preview`) using `tsconfig.tsgo.json`
   - `npm run typecheck:astro` — type-check `.astro` files with `astro check` (classic TypeScript package)
@@ -99,3 +100,4 @@ The application lives at the repository root:
 - `e2e-tests/`: Playwright E2E tests (home, games, accessibility)
 - `drizzle.config.ts`, `vitest.config.ts`, `astro.config.mjs`, `playwright.config.ts`: tooling config
 - `README.md`: Project documentation
+- `.github/extensions/demo-launcher/`: Five-scenario Copilot app demo canvas, isolated HTML/theme-token styling, GitHub provisioning, and offline tests. Keep intentional security, logic-bug, and failing-test fixtures as text; materialize them only on separate disposable demo PR branches (or temporary directories for offline tests), never in the app. Use the documented `session.send` handoff plus verified receipts for app project/session actions. Issue-to-PR and CI repair use item-specific worktree sessions; only those buttons authorize their bounded demo-branch commits/pushes. Never create live demo repositories, issues, PRs, or review requests during validation.

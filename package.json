@@ -19,6 +19,7 @@
     "prebuild": "npm run db:setup",
     "predb:export": "npm run db:setup",
     "test:unit": "vitest run",
+    "test:demos": "node --test .github/extensions/demo-launcher/*.test.mjs",
     "test:e2e": "playwright test",
     "test:e2e:install": "playwright install chromium",
     "typecheck": "tsgo --noEmit -p tsconfig.tsgo.json",
