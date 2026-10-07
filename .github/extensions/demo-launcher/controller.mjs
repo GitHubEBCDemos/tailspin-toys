@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DEMO_OWNER, SOURCE_REPOSITORIES, TEMPLATE, UPSTREAM_REPOSITORY, assertOwnedRepository, isSourceRepository, provision, scanStatus } from "./github.mjs";
 import { CI_BRANCH, ciStatus, provisionScenarios, reviewStatus, scenarioIssue } from "./scenarios.mjs";
-import { launchUrl, repositorySetupUrl, verifyLauncher } from "./launch.mjs";
+import { launchUrl, verifyLauncher } from "./launch.mjs";
 
 export const FEATURE_PROMPT = "Add a basic game-title search to the Tailspin Toys home page. Use a labelled search input with case-insensitive filtering, a visible result count, and a helpful no-results message. Keep the existing dark theme and responsive grid. Follow repository guidance, add data-testid attributes and focused tests, and verify the change. Do not commit, push, create an issue or PR, or install software without asking.";
 
@@ -133,12 +133,11 @@ export class Controller {
     return {
       ...state,
       activeId: environment?.id || null,
-      environments: (environment ? [environment] : []).map((item) => {
-        const sessionUrl = item.launcherReady && !item.cleanup ? launchUrl(item) : null;
-        return { ...item, launchUrl: sessionUrl, setupUrl: sessionUrl ? repositorySetupUrl(item.repo) : null };
-      }),
+      environments: (environment ? [environment] : []).map((item) => ({
+        ...item, launchUrl: item.launcherReady && !item.cleanup ? launchUrl(item) : null,
+      })),
       context: { repo: this.repo, sessionId: this.sessionId(), kind: this.isSource ? "source" : environment ? "demo" : "unrecognized" },
-      interfaceVersion: 4,
+      interfaceVersion: 5,
     };
   }
 

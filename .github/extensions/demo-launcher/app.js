@@ -41,7 +41,7 @@ function showError(message) {
 
 function render() {
   if (!state) return;
-  if (state.interfaceVersion !== 4) {
+  if (state.interfaceVersion !== 5) {
     element("setup").hidden = true;
     element("demos").hidden = true;
     element("cleanup-section").hidden = true;
@@ -56,7 +56,7 @@ function render() {
   const pending = environment?.request?.status === "pending";
   const cleaning = Boolean(environment?.cleanup);
   element("context-summary").textContent = source
-    ? "Create a disposable demo repository, approve repository setup, then start its Copilot app session."
+    ? "Create a disposable demo repository, wait for setup, then open its Copilot app session."
     : demo ? `Demo instance: ${state.context.repo}` : `This repository is not a recorded demo instance: ${state.context.repo}`;
   element("setup").hidden = !source;
   element("demos").hidden = !demo || cleaning;
@@ -67,19 +67,14 @@ function render() {
       : linked ? "Demos run in this repository. Game search uses this session; issue and CI work use separate worktrees."
         : "Waiting for the startup prompt to verify and register this session. Ask Copilot to read the canvas state and bind this session if startup was interrupted.";
   element("environment-info").hidden = !environment;
-  element("environment-badge").textContent = creating ? "Creating..." : launchAttempt ? "Review setup first" : "Ready";
+  element("environment-badge").textContent = creating ? "Creating..." : launchAttempt ? "Ready to open" : "Ready";
   element("create").disabled = busy;
   element("create").setAttribute("aria-busy", String(creating));
   element("create-label").textContent = creating ? "Creating..." : "Create";
   element("create-spinner").hidden = !creating;
-  const canStart = Boolean(source && environment?.setupUrl && environment?.launchUrl && !cleaning && !creating);
+  const canStart = Boolean(source && environment?.launchUrl && !cleaning && !creating);
   element("open-app").hidden = !canStart;
-  element("start-session").hidden = !canStart;
-  element("approval-instructions").hidden = !canStart;
-  if (canStart) {
-    element("open-app").href = environment.setupUrl;
-    element("start-session").href = environment.launchUrl;
-  }
+  if (canStart) element("open-app").href = environment.launchUrl;
   element("feature").disabled = busy || pending || !demo || !linked || cleaning;
   element("refresh").disabled = busy || !demo || !environment?.prNumber || cleaning;
   element("pr-link").hidden = !environment?.prNumber;
@@ -134,29 +129,17 @@ function render() {
 
 async function act(route, body = {}) {
   if (busy) return;
-  let launchWindow;
   const launching = route === "create";
   if (launching) {
     launchAttempt = null;
     state = { ...state, activeId: null, environments: [] };
-    // Open during the click gesture; waiting for provisioning would lose popup permission.
-    try {
-      launchWindow = window.open("about:blank", "_blank");
-      if (launchWindow) {
-        launchWindow.opener = null;
-        launchWindow.document.title = "Preparing Copilot demo";
-        launchWindow.document.body.textContent = "Preparing your demo environment. Keep the launcher session open; this tab will open repository setup for your approval when provisioning finishes.";
-      }
-    } catch (error) {
-      element("status").textContent = `Automatic setup navigation is unavailable: ${error.message}. Use Review repository setup after provisioning.`;
-    }
   }
   busy = true;
   creating = launching;
   actionError = null;
   showError(null);
   element("status").textContent = launching
-    ? "Creating your demo environment. This may take a few minutes; repository setup will open for approval when it is ready."
+    ? "Creating your demo environment. This may take a few minutes; Open session becomes available when setup finishes."
     : "Working...";
   render();
   try {
@@ -164,21 +147,11 @@ async function act(route, body = {}) {
     const environment = state.environments.find((item) => item.id === state.activeId);
     element("status").textContent = route === "feature" || route === "cleanup" || (route === "scenario" && body.kind !== "review")
       ? "Requested. Follow progress in the conversation." : "Updated.";
-    if (launching && environment?.setupUrl && environment?.launchUrl) {
+    if (launching && environment?.launchUrl) {
       launchAttempt = environment;
-      if (launchWindow && !launchWindow.closed) {
-        try {
-          launchWindow.location.replace(environment.setupUrl);
-          element("status").textContent = "Review and accept repository setup in the app, then return here and select Start demo session. No demo session has been started.";
-        } catch (error) {
-          element("status").textContent = `Automatic setup navigation failed: ${error.message}. Use Review repository setup, then Start demo session after approval.`;
-        }
-      } else {
-        element("status").textContent = "Environment ready. Use Review repository setup; the automatic setup tab was blocked or closed. After accepting setup, select Start demo session.";
-      }
+      element("status").textContent = "Environment ready. Select Open session to start the demo in Copilot app.";
     }
   } catch (error) {
-    if (launchWindow && !launchWindow.closed) launchWindow.close();
     element("status").textContent = launching ? "Creation stopped. Another Create starts a new environment." : "";
     // Re-read the receipt: even failed setup may already have created the repo or PR.
     try {

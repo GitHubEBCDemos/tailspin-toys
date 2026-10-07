@@ -12,7 +12,7 @@ Do not switch branches, modify the main checkout, commit, push, install software
 
 ## Use the existing provider
 
-The launcher opens repository setup first. The user reviews and accepts its configuration/extensions there, then returns to the source canvas and selects Start demo session. That action is the user's confirmation, not a trust-state readback. Do not launch another session automatically or assume approval succeeded because a link was opened.
+The launcher provisions on Create, then exposes one Open session link. Any repository configuration/extensions review stays inside the app's session launch; never send the user back to a separate setup step. Once loaded, the extension verifies the recorded demo's pinned runtime and opens `copilot-demos` itself using instance ID `demo-session-panel`. It reuses an already-open project canvas and does not automatically open source, unrecognized, cleanup, or item sessions. This cannot enable an extension the host has not loaded.
 
 If `copilot-demos` is already declared in the session's canvas catalog, call `list_canvas_capabilities` and continue to opening and binding it. A successful capability read is the readiness check. Do not reload or require lifecycle tools for an available canvas. Zero lifecycle tools is not itself a canvas failure.
 
@@ -24,7 +24,7 @@ When the app displays repository trust approval, the user must review and accept
 
 ## Open and bind the canvas
 
-Use `list_canvas_capabilities` for `canvasId="copilot-demos"`, then `open_canvas` with that type and a stable caller-chosen `instanceId`. Read its `get_state` action and verify `context.repo` matches the expected repository and `context.kind="demo"`.
+Use `list_canvas_capabilities` for `canvasId="copilot-demos"`, then `open_canvas` with that type and `instanceId="demo-session-panel"` to focus the automatically opened panel, or open it if automatic opening failed. Read its `get_state` action and verify `context.repo` matches the expected repository and `context.kind="demo"`.
 
 Use `get_session` with the returned `context.sessionId` to verify this session's repository and project. Call `bind_session` with the expected `repo` and the verified `projectId`, `sessionId`, and `sessionName`. Use the same canvas `instanceId` for actions, not its canvas type.
 

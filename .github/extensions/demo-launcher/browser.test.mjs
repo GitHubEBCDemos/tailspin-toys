@@ -26,14 +26,19 @@ async function finish(h, kind) {
   });
 }
 
-function assertRepositorySetup(href, repo) {
+function assertSessionLaunch(href, repo) {
   const launcher = new URL(href);
   assert.equal(launcher.origin, "https://github.com");
   assert.equal(launcher.pathname, "/copilot/app/launch");
-  assert.equal(launcher.searchParams.get("open"), `ghapp://github.com/${repo}`);
+  const target = new URL(launcher.searchParams.get("open"));
+  assert.equal(target.host, "session");
+  assert.equal(target.pathname, "/new");
+  assert.equal(target.searchParams.get("repo"), repo);
+  assert.equal(target.searchParams.get("branch"), "main");
+  return target;
 }
 
-test("Create opens repository setup only; the user explicitly starts the pinned demo session afterward", async (t) => {
+test("Create only provisions; one explicit Open session action launches the pinned demo", async (t) => {
   const h = await harness(t);
   const { page, context, url } = await canvas(t, h.source);
   await page.goto(url);
@@ -46,23 +51,21 @@ test("Create opens repository setup only; the user explicitly starts the pinned 
   await expect(page.getByTestId("cleanup")).toBeHidden();
   await expect(page.getByRole("textbox")).toHaveCount(0);
   await expect(page.getByRole("checkbox")).toHaveCount(0);
-  const opened = page.waitForEvent("popup");
   await page.getByTestId("create-environment").click();
-  const popup = await opened;
-  await expect(popup).toHaveURL(/^https:\/\/github.com\/copilot\/app\/launch\?open=/);
+  await expect(page.getByTestId("open-app")).toBeVisible();
+  await expect(page.getByTestId("open-app")).toHaveText("Open session");
   const first = await h.current();
-  assertRepositorySetup(popup.url(), first.repo);
-  await expect(page.getByTestId("open-app")).toHaveAttribute("href", popup.url());
-  await expect(page.getByTestId("start-demo-session")).toBeVisible();
-  await expect(page.locator("#approval-instructions")).toContainText("this launcher cannot read the app's trust state");
-  await expect(page.locator("#status")).toContainText("No demo session has been started");
-  assert.equal(context.pages().length, 2);
+  assertSessionLaunch(await page.getByTestId("open-app").getAttribute("href"), first.repo);
+  await expect(page.getByTestId("start-demo-session")).toHaveCount(0);
+  await expect(page.locator("#approval-instructions")).toHaveCount(0);
+  await expect(page.locator("#status")).toContainText("Select Open session");
+  assert.equal(context.pages().length, 1);
   for (const colorScheme of ["light", "dark"]) {
     await page.emulateMedia({ colorScheme });
     assert.deepEqual((await new AxeBuilder({ page }).analyze()).violations.map(({ id }) => id), []);
   }
   const sessionOpened = page.waitForEvent("popup");
-  await page.getByTestId("start-demo-session").focus();
+  await page.getByTestId("open-app").focus();
   await page.keyboard.press("Enter");
   const sessionPopup = await sessionOpened;
   await expect(sessionPopup).toHaveURL(/^https:\/\/github.com\/copilot\/app\/launch\?open=/);
@@ -82,26 +85,23 @@ test("Create opens repository setup only; the user explicitly starts the pinned 
   await expect(page.locator("#environment-info")).toBeVisible();
   await expect(page.getByTestId("open-app")).toBeVisible();
   await expect(page.getByTestId("create-environment")).toBeEnabled();
-  await popup.close();
   await sessionPopup.close();
   await page.reload();
   await expect(page.locator("#environment-info")).toBeHidden();
-  await expect(page.getByTestId("start-demo-session")).toBeHidden();
-  const nextPopup = page.waitForEvent("popup");
+  await expect(page.getByTestId("open-app")).toBeHidden();
   await page.getByTestId("create-environment").click();
-  const next = await nextPopup;
-  await expect(next).toHaveURL(/^https:\/\/github.com\/copilot\/app\/launch\?open=/);
-  assertRepositorySetup(next.url(), (await h.current()).repo);
+  await expect(page.getByTestId("open-app")).toBeVisible();
+  assertSessionLaunch(await page.getByTestId("open-app").getAttribute("href"), (await h.current()).repo);
   assert.notEqual((await h.current()).repo, first.repo);
   assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 2);
   await expect(page.getByTestId("create-environment")).toBeEnabled();
   await expect(page.locator("#environment-info")).toBeVisible();
-  const nextTarget = new URL(new URL(await page.getByTestId("start-demo-session").getAttribute("href")).searchParams.get("open"));
+  const nextTarget = new URL(new URL(await page.getByTestId("open-app").getAttribute("href")).searchParams.get("open"));
   assert.equal(nextTarget.searchParams.get("repo"), (await h.current()).repo);
-  await next.close();
+  assert.equal(context.pages().length, 1);
 });
 
-test("Create starts fresh after failure, shows current progress, and opens setup for the new repository", async (t) => {
+test("Create starts fresh after failure and exposes Open session only after provisioning", async (t) => {
   const h = await harness(t);
   h.remote.failure = (method) => method === "PATCH" ? new GitHubError("Forbidden: enable code scanning", 403) : null;
   const { page, context, url } = await canvas(t, h.source);
@@ -126,7 +126,6 @@ test("Create starts fresh after failure, shows current progress, and opens setup
   h.remote.setupRun = { status: "in_progress", conclusion: null };
   const gate = Promise.withResolvers();
   h.source.sleep = () => gate.promise;
-  const opened = page.waitForEvent("popup");
   try {
     await page.getByTestId("create-environment").click();
     await expect(page.getByTestId("create-environment")).toBeDisabled();
@@ -137,7 +136,6 @@ test("Create starts fresh after failure, shows current progress, and opens setup
     await expect(page.locator("#setup-status")).toContainText("Waiting for CodeQL setup validation");
     await expect(page.getByRole("alert")).toBeHidden();
     await expect(page.getByTestId("open-app")).toBeHidden();
-    await expect(page.getByTestId("start-demo-session")).toBeHidden();
     assert.deepEqual((await new AxeBuilder({ page }).analyze()).violations.map(({ id }) => id), []);
     await page.emulateMedia({ reducedMotion: "reduce" });
     await expect(page.locator("#create-spinner")).toHaveCSS("animation-name", "none");
@@ -145,8 +143,7 @@ test("Create starts fresh after failure, shows current progress, and opens setup
     h.remote.setupRun = { status: "completed", conclusion: "success" };
     gate.resolve();
   }
-  const popup = await opened;
-  await expect(popup).toHaveURL(/^https:\/\/github.com\/copilot\/app\/launch\?open=/);
+  await expect(page.getByTestId("open-app")).toBeVisible();
   await expect(page.getByTestId("create-environment")).toHaveText("Create");
   await expect(page.getByTestId("create-environment")).toBeEnabled();
   await expect(page.locator("#create-spinner")).toBeHidden();
@@ -156,104 +153,93 @@ test("Create starts fresh after failure, shows current progress, and opens setup
   assert.equal((await h.store.read()).environments.length, 2);
   assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 2);
   await expect(page.locator("#environment-info")).toBeVisible();
-  assertRepositorySetup(popup.url(), (await h.current()).repo);
-  await popup.close();
+  assertSessionLaunch(await page.getByTestId("open-app").getAttribute("href"), (await h.current()).repo);
+  assert.equal(context.pages().length, 1);
 });
 
-test("popup blocking retains working setup and session links, including after a canceled launch", async (t) => {
+test("Open session is a native link unaffected by window.open blocking and retained after cancellation", async (t) => {
   const h = await harness(t);
   const { page, url } = await canvas(t, h.source);
   await page.addInitScript(() => { window.open = () => null; });
   await page.goto(url);
   await page.getByTestId("create-environment").click();
-  await expect(page.locator("#status")).toContainText("blocked or closed");
+  await expect(page.locator("#status")).toContainText("Select Open session");
   await expect(page.getByTestId("open-app")).toHaveAttribute("href", /^https:\/\/github.com\/copilot\/app\/launch\?open=/);
-  assertRepositorySetup(await page.getByTestId("open-app").getAttribute("href"), (await h.current()).repo);
-  const setupOpened = page.waitForEvent("popup");
-  await page.getByTestId("open-app").click();
-  const setupPopup = await setupOpened;
-  await expect(setupPopup).toHaveURL(await page.getByTestId("open-app").getAttribute("href"));
-  await setupPopup.close();
-  await expect(page.getByTestId("start-demo-session")).toBeVisible();
   const sessionOpened = page.waitForEvent("popup");
-  await page.getByTestId("start-demo-session").click();
+  await page.getByTestId("open-app").click();
   const sessionPopup = await sessionOpened;
-  await expect(sessionPopup).toHaveURL(await page.getByTestId("start-demo-session").getAttribute("href"));
+  await expect(sessionPopup).toHaveURL(await page.getByTestId("open-app").getAttribute("href"));
   const target = new URL(new URL(sessionPopup.url()).searchParams.get("open"));
   assert.equal(target.host, "session");
   assert.equal(target.pathname, "/new");
   assert.equal(target.searchParams.get("repo"), (await h.current()).repo);
   await sessionPopup.close();
-  await expect(page.getByTestId("start-demo-session")).toBeVisible();
+  await expect(page.getByTestId("open-app")).toBeVisible();
   await expect(page.getByTestId("create-environment")).toBeEnabled();
   await page.reload();
   await expect(page.getByTestId("open-app")).toBeHidden();
-  await expect(page.getByTestId("start-demo-session")).toBeHidden();
   await expect(page.locator("#environment-info")).toBeHidden();
 });
 
-test("closing the reserved tab during provisioning retains both explicit launch stages", async (t) => {
+test("another Create hides the previous launch link until the new repository is ready", async (t) => {
   const h = await harness(t);
+  const { page, context, url } = await canvas(t, h.source);
+  await page.goto(url);
+  await page.getByTestId("create-environment").click();
+  await expect(page.getByTestId("open-app")).toBeVisible();
+  const previousRepo = (await h.current()).repo;
   h.remote.setupRun = { status: "in_progress", conclusion: null };
   const gate = Promise.withResolvers();
   h.source.sleep = () => gate.promise;
-  const { page, url } = await canvas(t, h.source);
-  await page.goto(url);
-  const opened = page.waitForEvent("popup");
   await page.getByTestId("create-environment").click();
-  const popup = await opened;
   try {
     await expect(page.locator("#setup-status")).toContainText("Waiting for CodeQL setup validation");
-    await expect(page.getByTestId("start-demo-session")).toBeHidden();
-    assert.equal(popup.url(), "about:blank");
-    await popup.close();
+    await expect(page.getByTestId("open-app")).toBeHidden();
+    assert.equal(context.pages().length, 1);
   } finally {
     h.remote.setupRun = { status: "completed", conclusion: "success" };
     gate.resolve();
   }
-  await expect(page.locator("#status")).toContainText("blocked or closed");
-  assertRepositorySetup(await page.getByTestId("open-app").getAttribute("href"), (await h.current()).repo);
-  await expect(page.getByTestId("start-demo-session")).toBeVisible();
-  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 1);
+  await expect(page.getByTestId("open-app")).toBeVisible();
+  assertSessionLaunch(await page.getByTestId("open-app").getAttribute("href"), (await h.current()).repo);
+  assert.notEqual((await h.current()).repo, previousRepo);
+  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 2);
   assert.equal(h.messages.length, 0);
 });
 
-test("a newly created CodeQL run's 404 keeps the spinner active and opens setup for the same repository when ready", async (t) => {
+test("a newly created CodeQL run's 404 keeps Open session hidden without opening any tabs", async (t) => {
   const h = await harness(t);
   h.remote.setupRun = { status: "in_progress", conclusion: null };
   h.remote.failure = (method, path) => method === "GET" && path.endsWith("/actions/runs/42")
     ? new GitHubError("Not Found", 404) : null;
   const gate = Promise.withResolvers();
   h.source.sleep = () => gate.promise;
-  const { page, url } = await canvas(t, h.source);
+  const { page, context, url } = await canvas(t, h.source);
   await page.goto(url);
-  const opened = page.waitForEvent("popup");
   await page.getByTestId("create-environment").click();
-  const popup = await opened;
   try {
     await expect(page.locator("#setup-status")).toContainText("Waiting for CodeQL setup validation");
     await expect(page.getByTestId("create-environment")).toBeDisabled();
     await expect(page.locator("#create-spinner")).toBeVisible();
     await expect(page.getByRole("alert")).toBeHidden();
     await expect(page.getByTestId("open-app")).toBeHidden();
-    assert.equal(popup.url(), "about:blank");
+    assert.equal(context.pages().length, 1);
     assert.equal(h.remote.pulls.length, 0);
   } finally {
     h.remote.failure = null;
     h.remote.setupRun = { status: "completed", conclusion: "success" };
     gate.resolve();
   }
-  await expect(popup).toHaveURL(/^https:\/\/github.com\/copilot\/app\/launch\?open=/);
-  assertRepositorySetup(popup.url(), (await h.current()).repo);
+  await expect(page.getByTestId("open-app")).toBeVisible();
+  assertSessionLaunch(await page.getByTestId("open-app").getAttribute("href"), (await h.current()).repo);
   assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 1);
   assert.equal((await h.store.read()).environments.length, 1);
   await expect(page.getByRole("alert")).toBeHidden();
   await expect(page.getByTestId("create-environment")).toBeEnabled();
   await expect(page.locator("#create-spinner")).toBeHidden();
-  await popup.close();
 });
 
-test("both launch stages stay hidden until the inherited canvas is verified on main", async (t) => {
+test("Open session stays hidden until the inherited canvas is verified on main", async (t) => {
   const h = await harness(t);
   const gate = Promise.withResolvers();
   h.source.api = async (method, path, body) => {
@@ -267,7 +253,6 @@ test("both launch stages stay hidden until the inherited canvas is verified on m
     await page.getByTestId("create-environment").click();
     await expect(page.locator("#setup-status")).toContainText("Verifying the published template canvas");
     await expect(page.getByTestId("open-app")).toBeHidden();
-    await expect(page.getByTestId("start-demo-session")).toBeHidden();
     await expect(page.getByTestId("create-environment")).toBeDisabled();
     const environment = await h.current();
     assert.equal(environment.launcherCommit, undefined);
@@ -277,8 +262,7 @@ test("both launch stages stay hidden until the inherited canvas is verified on m
     gate.resolve();
   }
   await expect(page.getByTestId("open-app")).toBeVisible();
-  assertRepositorySetup(await page.getByTestId("open-app").getAttribute("href"), (await h.current()).repo);
-  const target = new URL(new URL(await page.getByTestId("start-demo-session").getAttribute("href")).searchParams.get("open"));
+  const target = assertSessionLaunch(await page.getByTestId("open-app").getAttribute("href"), (await h.current()).repo);
   assert.equal(target.searchParams.get("branch"), "main");
   assert.equal((await h.current()).launcherVerifiedCommit, h.remote.mainSha);
   await expect(page.getByTestId("create-environment")).toBeEnabled();

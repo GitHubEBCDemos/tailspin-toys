@@ -23,14 +23,12 @@
         <div id="environment-info" hidden>
           <p><a id="repo-link" data-testid="repo-link" target="_blank" rel="noopener noreferrer"></a></p>
           <p id="setup-status" class="muted" role="status" aria-live="polite"></p>
-          <p id="approval-instructions" class="hint" hidden>First open repository setup and review and accept its configuration and extensions in the app. Then return here and select Start demo session. Selecting Start confirms you have completed approval; this launcher cannot read the app's trust state.</p>
           <div class="actions">
-            <a id="open-app" class="button" data-testid="open-app" target="_blank" rel="noopener noreferrer" hidden>Review repository setup</a>
-            <a id="start-session" class="button" data-testid="start-demo-session" aria-describedby="approval-instructions" target="_blank" rel="noopener noreferrer" hidden>Start demo session</a>
+            <a id="open-app" class="button" data-testid="open-app" target="_blank" rel="noopener noreferrer" hidden>Open session</a>
           </div>
         </div>
 
-        <p class="hint">Creates an automatically named public repo in <a href="https://github.com/GitHubEBCDemos" data-testid="demo-org-link" target="_blank" rel="noopener noreferrer">GitHubEBCDemos</a> from the <a href="https://github.com/GitHubEBCDemos/tailspin-toys" data-testid="template-link" target="_blank" rel="noopener noreferrer">published Tailspin Toys template</a>, a pagination issue, and three demo PRs. After verifying the inherited canvas, opens repository setup for your approval, not a session. Return here after accepting setup and select Start demo session. No canvas files are uploaded or merged; publish canvas changes to the template before creating demos. Session setup runs <code>npm ci</code>.</p>
+        <p class="hint">Select Create, wait for provisioning, then select Open session. Creates an automatically named public repo in <a href="https://github.com/GitHubEBCDemos" data-testid="demo-org-link" target="_blank" rel="noopener noreferrer">GitHubEBCDemos</a> from the <a href="https://github.com/GitHubEBCDemos/tailspin-toys" data-testid="template-link" target="_blank" rel="noopener noreferrer">published Tailspin Toys template</a>, a pagination issue, and three demo PRs. The demo extension opens this canvas when it loads in the new session. Review any configuration/extensions approval inside that launch; no return to this launcher is required. No canvas files are uploaded or merged. Session setup runs <code>npm ci</code>.</p>
         <button id="create" data-testid="create-environment" type="button" disabled>
           <span id="create-spinner" class="spinner" aria-hidden="true" hidden></span><span id="create-label">Create</span>
         </button>

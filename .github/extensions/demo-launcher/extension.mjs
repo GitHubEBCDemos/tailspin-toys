@@ -6,16 +6,18 @@ import { Controller, Store } from "./controller.mjs";
 import { githubApi, requestCopilotReview } from "./github.mjs";
 import { startServer } from "./server.mjs";
 import { workspaceRepository } from "./workspace.mjs";
+import { openStartupCanvas } from "./startup.mjs";
 
 const servers = new Map();
 const emptyInput = { type: "object", properties: {}, additionalProperties: false };
 let session;
+const directory = fileURLToPath(new URL("../../../", import.meta.url));
 const controller = new Controller({
   store: new Store(join(process.env.COPILOT_HOME || join(homedir(), ".copilot"), "extensions", "demo-launcher", "artifacts")),
   api: githubApi,
   requestReview: requestCopilotReview,
   send: (options) => session.send(options),
-  repo: await workspaceRepository(fileURLToPath(new URL("../../../", import.meta.url))),
+  repo: await workspaceRepository(directory),
   sessionId: () => session.sessionId,
 });
 
@@ -106,3 +108,10 @@ session = await joinSession({
     },
   })],
 });
+
+try {
+  await openStartupCanvas({ controller, session, directory });
+} catch (error) {
+  console.error("Demo canvas automatic startup failed:", error);
+  await session.log(`Demo canvas automatic startup failed: ${error.message}`, { level: "error" });
+}

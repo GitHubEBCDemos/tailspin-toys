@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { repositoryFromRemote } from "./workspace.mjs";
-import { RUNTIME_FILES, launchUrl, repositorySetupUrl, verifyLauncher } from "./launch.mjs";
+import { RUNTIME_FILES, launchUrl, verifyLauncher } from "./launch.mjs";
 import { DEMO_OWNER, GitHubError, SOURCE_REPOSITORIES, TEMPLATE, UPSTREAM_REPOSITORY } from "./github.mjs";
 import { harness } from "./test-support.mjs";
 
@@ -75,11 +75,8 @@ test("the published template canvas is inherited and verified without any runtim
   assert.deepEqual(h.remote.runtimeFiles, h.remote.templateFiles);
   assert.deepEqual(h.remote.runtimeFiles.map(({ path }) => path), RUNTIME_FILES.map((file) => `.github/extensions/demo-launcher/${file}`));
   const url = new URL(created.environments[0].launchUrl);
-  const setup = new URL(created.environments[0].setupUrl);
-  assert.equal(created.interfaceVersion, 4);
-  assert.equal(setup.origin, "https://github.com");
-  assert.equal(setup.pathname, "/copilot/app/launch");
-  assert.equal(setup.searchParams.get("open"), `ghapp://github.com/${environment.repo}`);
+  assert.equal(created.interfaceVersion, 5);
+  assert.equal(created.environments[0].setupUrl, undefined);
   assert.equal(url.origin, "https://github.com");
   const target = new URL(url.searchParams.get("open"));
   assert.equal(target.protocol, "ghapp:");
@@ -109,24 +106,14 @@ test("an older unmerged launcher receipt cannot expose an app launch link", () =
   assert.equal(launchUrl({ repo: "presenter/demo", defaultBranch: "main", launcherReady: true, launcherCommit: "old-commit" }), null);
 });
 
-test("repository setup links open the repository, never a session or kickoff", () => {
-  const repo = `${DEMO_OWNER}/tailspin-demo-setup`;
-  const url = new URL(repositorySetupUrl(repo));
-  assert.equal(url.searchParams.get("open"), `ghapp://github.com/${repo}`);
-  const target = new URL(url.searchParams.get("open"));
-  assert.equal(target.host, "github.com");
-  assert.equal(target.pathname, `/${repo}`);
-  assert.equal(target.search, "");
-});
-
-test("cleanup hides both setup and session links", async (t) => {
+test("cleanup hides the session launch link", async (t) => {
   const h = await harness(t);
   await h.create();
   await h.link();
   await h.controller.cleanup(confirmation(await h.current()));
   const state = await h.controller.state();
   assert.equal(state.environments[0].launchUrl, null);
-  assert.equal(state.environments[0].setupUrl, null);
+  assert.equal(state.environments[0].setupUrl, undefined);
 });
 
 test("short kickoff reads the pinned guide without requiring unavailable lifecycle tools", () => {
@@ -310,7 +297,7 @@ for (const failure of ["missing file", "missing bootstrap guide", "wrong content
     assert.equal(environment.step, "Verifying the published template canvas");
     const demo = await h.makeController(environment.repo).state();
     assert.equal(demo.environments[0].launchUrl, null);
-    assert.equal(demo.environments[0].setupUrl, null);
+    assert.equal(demo.environments[0].setupUrl, undefined);
     assert.deepEqual((await h.source.state()).environments, []);
     assert.equal(h.messages.length, 0);
   });

@@ -2,13 +2,9 @@ import { assertOwnedRepository, TEMPLATE } from "./github.mjs";
 
 export const RUNTIME_FILES = [
   "extension.mjs", "controller.mjs", "github.mjs", "scenarios.mjs", "server.mjs",
-  "workspace.mjs", "launch.mjs", "app.js", "index.html", "style.css", "BOOTSTRAP.md",
+  "workspace.mjs", "launch.mjs", "startup.mjs", "app.js", "index.html", "style.css", "BOOTSTRAP.md",
 ];
 const runtimeDirectory = ".github/extensions/demo-launcher";
-
-export function repositorySetupUrl(repo) {
-  return `https://github.com/copilot/app/launch?open=${encodeURIComponent(`ghapp://github.com/${repo}`)}`;
-}
 
 export function launchUrl(environment) {
   // Existing receipts pin the default-branch commit under the former merge field.
@@ -75,6 +71,6 @@ export async function verifyLauncher(environment, { api, save }) {
   environment.launcherTemplateCommit = templateRef.object.sha;
   environment.launcherVerifiedCommit = base.object.sha;
   environment.launcherReady = true;
-  environment.step = "Ready to review repository setup";
+  environment.step = "Ready to open session";
   await save();
 }
