@@ -12,6 +12,8 @@ Do not switch branches, modify the main checkout, commit, push, install software
 
 ## Use the existing provider
 
+The launcher opens repository setup first. The user reviews and accepts its configuration/extensions there, then returns to the source canvas and selects Start demo session. That action is the user's confirmation, not a trust-state readback. Do not launch another session automatically or assume approval succeeded because a link was opened.
+
 If `copilot-demos` is already declared in the session's canvas catalog, call `list_canvas_capabilities` and continue to opening and binding it. A successful capability read is the readiness check. Do not reload or require lifecycle tools for an available canvas. Zero lifecycle tools is not itself a canvas failure.
 
 If the canvas is absent or unavailable, discover lifecycle tools with `api_tool.list_resources({"paths":["extensions_reload","extensions_manage"]})`. Use only the returned definitions. If `extensions_manage` is available, inspect `demo-launcher` for its status and log diagnostics. Only reload if the provider is unavailable and `extensions_reload` was actually discovered; make at most one recovery attempt, then use the refreshed canvas catalog.

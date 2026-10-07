@@ -6,6 +6,10 @@ export const RUNTIME_FILES = [
 ];
 const runtimeDirectory = ".github/extensions/demo-launcher";
 
+export function repositorySetupUrl(repo) {
+  return `https://github.com/copilot/app/launch?open=${encodeURIComponent(`ghapp://github.com/${repo}`)}`;
+}
+
 export function launchUrl(environment) {
   // Existing receipts pin the default-branch commit under the former merge field.
   const verifiedCommit = environment.launcherVerifiedCommit || environment.launcherMergeCommit;
@@ -71,6 +75,6 @@ export async function verifyLauncher(environment, { api, save }) {
   environment.launcherTemplateCommit = templateRef.object.sha;
   environment.launcherVerifiedCommit = base.object.sha;
   environment.launcherReady = true;
-  environment.step = "Ready to open in Copilot app";
+  environment.step = "Ready to review repository setup";
   await save();
 }

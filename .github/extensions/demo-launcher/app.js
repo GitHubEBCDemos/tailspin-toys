@@ -20,7 +20,7 @@ let state;
 let busy = false;
 let creating = false;
 let actionError;
-let launchFallback;
+let launchAttempt;
 let cleanupConfirmation;
 
 async function api(route, body) {
@@ -41,7 +41,7 @@ function showError(message) {
 
 function render() {
   if (!state) return;
-  if (state.interfaceVersion !== 3) {
+  if (state.interfaceVersion !== 4) {
     element("setup").hidden = true;
     element("demos").hidden = true;
     element("cleanup-section").hidden = true;
@@ -50,13 +50,13 @@ function render() {
   }
   const source = state.context.kind === "source";
   const environment = source && !creating
-    ? launchFallback : state.environments.find((item) => item.id === state.activeId);
+    ? launchAttempt : state.environments.find((item) => item.id === state.activeId);
   const demo = state.context.kind === "demo";
   const linked = environment?.sessions?.some((item) => item.runtimeId === state.context.sessionId);
   const pending = environment?.request?.status === "pending";
   const cleaning = Boolean(environment?.cleanup);
   element("context-summary").textContent = source
-    ? "Create a disposable demo repository, then continue in its own Copilot app session."
+    ? "Create a disposable demo repository, approve repository setup, then start its Copilot app session."
     : demo ? `Demo instance: ${state.context.repo}` : `This repository is not a recorded demo instance: ${state.context.repo}`;
   element("setup").hidden = !source;
   element("demos").hidden = !demo || cleaning;
@@ -67,13 +67,19 @@ function render() {
       : linked ? "Demos run in this repository. Game search uses this session; issue and CI work use separate worktrees."
         : "Waiting for the startup prompt to verify and register this session. Ask Copilot to read the canvas state and bind this session if startup was interrupted.";
   element("environment-info").hidden = !environment;
-  element("environment-badge").textContent = creating ? "Creating..." : launchFallback ? "Ready to open" : "Ready";
+  element("environment-badge").textContent = creating ? "Creating..." : launchAttempt ? "Review setup first" : "Ready";
   element("create").disabled = busy;
   element("create").setAttribute("aria-busy", String(creating));
   element("create-label").textContent = creating ? "Creating..." : "Create";
   element("create-spinner").hidden = !creating;
-  element("open-app").hidden = !environment?.launchUrl || cleaning || creating;
-  if (environment?.launchUrl) element("open-app").href = environment.launchUrl;
+  const canStart = Boolean(source && environment?.setupUrl && environment?.launchUrl && !cleaning && !creating);
+  element("open-app").hidden = !canStart;
+  element("start-session").hidden = !canStart;
+  element("approval-instructions").hidden = !canStart;
+  if (canStart) {
+    element("open-app").href = environment.setupUrl;
+    element("start-session").href = environment.launchUrl;
+  }
   element("feature").disabled = busy || pending || !demo || !linked || cleaning;
   element("refresh").disabled = busy || !demo || !environment?.prNumber || cleaning;
   element("pr-link").hidden = !environment?.prNumber;
@@ -131,7 +137,7 @@ async function act(route, body = {}) {
   let launchWindow;
   const launching = route === "create";
   if (launching) {
-    launchFallback = null;
+    launchAttempt = null;
     state = { ...state, activeId: null, environments: [] };
     // Open during the click gesture; waiting for provisioning would lose popup permission.
     try {
@@ -139,10 +145,10 @@ async function act(route, body = {}) {
       if (launchWindow) {
         launchWindow.opener = null;
         launchWindow.document.title = "Preparing Copilot demo";
-        launchWindow.document.body.textContent = "Preparing your demo environment. Keep the launcher session open; this tab will continue to Copilot app when setup finishes.";
+        launchWindow.document.body.textContent = "Preparing your demo environment. Keep the launcher session open; this tab will open repository setup for your approval when provisioning finishes.";
       }
     } catch (error) {
-      element("status").textContent = `Automatic launch is unavailable: ${error.message}. Use Open in Copilot app after setup.`;
+      element("status").textContent = `Automatic setup navigation is unavailable: ${error.message}. Use Review repository setup after provisioning.`;
     }
   }
   busy = true;
@@ -150,7 +156,7 @@ async function act(route, body = {}) {
   actionError = null;
   showError(null);
   element("status").textContent = launching
-    ? "Creating your demo environment. This may take a few minutes; the new session will open when it is ready."
+    ? "Creating your demo environment. This may take a few minutes; repository setup will open for approval when it is ready."
     : "Working...";
   render();
   try {
@@ -158,18 +164,17 @@ async function act(route, body = {}) {
     const environment = state.environments.find((item) => item.id === state.activeId);
     element("status").textContent = route === "feature" || route === "cleanup" || (route === "scenario" && body.kind !== "review")
       ? "Requested. Follow progress in the conversation." : "Updated.";
-    if (launching && environment?.launchUrl) {
-      launchFallback = environment;
+    if (launching && environment?.setupUrl && environment?.launchUrl) {
+      launchAttempt = environment;
       if (launchWindow && !launchWindow.closed) {
         try {
-          launchWindow.location.replace(environment.launchUrl);
-          launchFallback = null;
-          element("status").textContent = "Continue in the launch tab and confirm the new session. Its startup prompt will open this canvas.";
+          launchWindow.location.replace(environment.setupUrl);
+          element("status").textContent = "Review and accept repository setup in the app, then return here and select Start demo session. No demo session has been started.";
         } catch (error) {
-          element("status").textContent = `Automatic launch failed: ${error.message}. Use Open in Copilot app.`;
+          element("status").textContent = `Automatic setup navigation failed: ${error.message}. Use Review repository setup, then Start demo session after approval.`;
         }
       } else {
-        element("status").textContent = "Environment ready. Use Open in Copilot app; the automatic launch tab was blocked or closed.";
+        element("status").textContent = "Environment ready. Use Review repository setup; the automatic setup tab was blocked or closed. After accepting setup, select Start demo session.";
       }
     }
   } catch (error) {
