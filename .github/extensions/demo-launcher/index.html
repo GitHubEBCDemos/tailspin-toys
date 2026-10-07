@@ -28,7 +28,7 @@
           </div>
         </div>
 
-        <p class="hint">Creates an automatically named public repo in <a href="https://github.com/GitHubEBCDemos" data-testid="demo-org-link" target="_blank" rel="noopener noreferrer">GitHubEBCDemos</a> from the <a href="https://github.com/GitHubEBCDemos/tailspin-toys" data-testid="template-link" target="_blank" rel="noopener noreferrer">Tailspin Toys template</a>, a pagination issue, and three demo PRs. Merges only the canvas setup into the new repo's main branch, then opens a Copilot app session once the canvas files are verified there. The source repos and demo PRs are never merged. Confirm the app's launch prompt; session setup runs <code>npm ci</code>.</p>
+        <p class="hint">Creates an automatically named public repo in <a href="https://github.com/GitHubEBCDemos" data-testid="demo-org-link" target="_blank" rel="noopener noreferrer">GitHubEBCDemos</a> from the <a href="https://github.com/GitHubEBCDemos/tailspin-toys" data-testid="template-link" target="_blank" rel="noopener noreferrer">published Tailspin Toys template</a>, a pagination issue, and three demo PRs. Opens a Copilot app session after verifying the inherited canvas files. No canvas files are uploaded or merged; publish canvas changes to the template before creating demos. Confirm the app's launch prompt and review any repository trust approval; session setup runs <code>npm ci</code>.</p>
         <button id="create" data-testid="create-environment" type="button" disabled>
           <span id="create-spinner" class="spinner" aria-hidden="true" hidden></span><span id="create-label">Create</span>
         </button>

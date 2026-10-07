@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { repositoryFromRemote } from "./workspace.mjs";
-import { LAUNCH_BRANCH, RUNTIME_FILES, launchUrl, provisionLauncher } from "./launch.mjs";
+import { RUNTIME_FILES, launchUrl, verifyLauncher } from "./launch.mjs";
 import { DEMO_OWNER, GitHubError, SOURCE_REPOSITORIES, TEMPLATE, UPSTREAM_REPOSITORY } from "./github.mjs";
 import { harness } from "./test-support.mjs";
 
@@ -66,20 +66,14 @@ test("the source is stateless while each instance retains its own environment", 
   await assert.rejects(unknown.cleanup({ confirmRepo: first.repo }), /not a recorded demo/);
 });
 
-test("only the verified canvas runtime is merged into the demo's main before launch", async (t) => {
+test("the published template canvas is inherited and verified without any runtime writes or merges", async (t) => {
   const h = await harness(t);
+  // Model a published runtime different from this development worktree.
+  h.remote.templateFiles[0].sha = "b".repeat(40);
   const created = await h.create();
   const environment = await h.current();
-  const tree = h.remote.trees[0];
-  assert.equal(tree.base_tree, "base-tree");
-  assert.deepEqual(tree.tree.map(({ path }) => path), RUNTIME_FILES.map((file) => `.github/extensions/demo-launcher/${file}`));
-  assert.ok(tree.tree.every(({ mode, type, content }) => mode === "100644" && type === "blob" && content.length > 0));
-  for (const file of RUNTIME_FILES) {
-    assert.equal(tree.tree.find(({ path }) => path.endsWith(`/${file}`)).content, await readFile(new URL(file, import.meta.url), "utf8"));
-  }
-  const commit = h.remote.commits.get(environment.launcherCommit);
-  assert.deepEqual(commit.parents, ["base-sha"]);
-  assert.equal(h.remote.branches.get(LAUNCH_BRANCH).object.sha, environment.launcherCommit);
+  assert.deepEqual(h.remote.runtimeFiles, h.remote.templateFiles);
+  assert.deepEqual(h.remote.runtimeFiles.map(({ path }) => path), RUNTIME_FILES.map((file) => `.github/extensions/demo-launcher/${file}`));
   const url = new URL(created.environments[0].launchUrl);
   assert.equal(url.origin, "https://github.com");
   const target = new URL(url.searchParams.get("open"));
@@ -88,21 +82,19 @@ test("only the verified canvas runtime is merged into the demo's main before lau
   assert.equal(target.pathname, "/new");
   assert.equal(target.searchParams.get("repo"), environment.repo);
   assert.equal(target.searchParams.get("branch"), "main");
-  assert.match(target.searchParams.get("prompt"), /get_session[\s\S]*bind_session/);
   const prompt = target.searchParams.get("prompt");
-  assert.ok(prompt.includes(`commit ${environment.launcherMergeCommit}`));
-  assert.match(prompt, /entire demo-launcher directory is absent[\s\S]*restore ONLY \.github\/extensions\/demo-launcher/);
-  assert.match(prompt, /do not overwrite existing work, partially present files, or symlinks/);
-  assert.match(prompt, /extensions_reload[\s\S]*extensions_manage[\s\S]*list_canvas_capabilities[\s\S]*open_canvas[\s\S]*bind_session/);
-  assert.match(prompt, /even if copilot-demos was absent/);
-  assert.ok(h.calls.some(({ method, path }) => method === "GET" && path.endsWith(`/contents/.github/extensions/demo-launcher?ref=${environment.launcherCommit}`)));
-  assert.ok(h.calls.some(({ method, path }) => method === "GET" && path.endsWith(`/contents/.github/extensions/demo-launcher?ref=${environment.launcherMergeCommit}`)));
-  const merges = h.calls.filter(({ method, path }) => method === "POST" && path.endsWith("/merges"));
-  assert.equal(merges.length, 1);
-  assert.equal(merges[0].path, `repos/${environment.repo}/merges`);
-  assert.equal(merges[0].body.base, "main");
-  assert.equal(merges[0].body.head, environment.launcherCommit);
-  assert.equal(environment.launcherMergeCommit, h.remote.mainSha);
+  assert.ok(prompt.includes(`Expected origin: ${environment.repo}; default branch: main; verified commit: ${environment.launcherVerifiedCommit}.`));
+  assert.match(prompt, /BOOTSTRAP\.md from that commit using git show/);
+  assert.ok(RUNTIME_FILES.includes("BOOTSTRAP.md"));
+  assert.ok(h.calls.some(({ method, path }) => method === "GET" && path === `repos/${TEMPLATE}/contents/.github/extensions/demo-launcher?ref=${h.remote.templateSha}`));
+  assert.ok(h.calls.some(({ method, path }) => method === "GET" && path === `repos/${environment.repo}/contents/.github/extensions/demo-launcher?ref=${environment.launcherVerifiedCommit}`));
+  assert.equal(environment.launcherTemplateCommit, h.remote.templateSha);
+  assert.equal(environment.launcherVerifiedCommit, h.remote.mainSha);
+  assert.equal(environment.launcherMergeCommit, undefined);
+  assert.equal(environment.launcherCommit, undefined);
+  const writes = h.calls.filter(({ method }) => method !== "GET");
+  assert.ok(writes.every(({ path, body }) => !path.endsWith("/merges") && !/\/git\/(trees|commits)$/.test(path) && !path.includes("/contents/.github/extensions/") && body?.ref !== "refs/heads/demo/launcher"));
+  assert.ok(writes.filter(({ path }) => path.endsWith("/git/refs")).every(({ body }) => body.ref !== "refs/heads/main"));
   assert.equal(h.remote.pulls.filter(({ state }) => state === "open").length, 3);
   assert.equal(h.calls.some(({ path }) => /\/pulls\/\d+\/merge$/.test(path)), false);
   assert.equal(h.messages.length, 0);
@@ -112,87 +104,104 @@ test("an older unmerged launcher receipt cannot expose an app launch link", () =
   assert.equal(launchUrl({ repo: "presenter/demo", defaultBranch: "main", launcherReady: true, launcherCommit: "old-commit" }), null);
 });
 
-for (const status of [403, 409]) {
-  test(`a merge HTTP ${status} keeps the app launch unavailable`, async (t) => {
+test("short kickoff reads the pinned guide without requiring unavailable lifecycle tools", () => {
+  const verifiedCommit = "a".repeat(40);
+  const url = new URL(launchUrl({
+    repo: `${DEMO_OWNER}/tailspin-demo-bootstrap`, defaultBranch: "main",
+    launcherReady: true, launcherVerifiedCommit: verifiedCommit,
+  }));
+  const target = new URL(url.searchParams.get("open"));
+  assert.equal(target.searchParams.get("mode"), "interactive");
+  const prompt = target.searchParams.get("prompt");
+  assert.ok(prompt.length <= 750, `Kickoff must stay short; received ${prompt.length} characters.`);
+  assert.match(prompt, /^Open the Copilot demos canvas\./);
+  assert.doesNotMatch(prompt, /extensions_reload|extensions_manage|First tool call/);
+  assert.ok(prompt.includes(`verified commit: ${verifiedCommit}.`));
+  assert.match(prompt, /BOOTSTRAP\.md from that commit using git show \(fetch origin main only if needed\)/);
+  assert.match(prompt, /Do not rewrite extension files or reload a working provider/);
+});
+
+test("legacy verified default-branch receipts still expose a launch link", () => {
+  const url = launchUrl({ repo: "presenter/demo", defaultBranch: "main", launcherReady: true, launcherMergeCommit: "old-verified-main" });
+  assert.ok(new URL(new URL(url).searchParams.get("open")).searchParams.get("prompt").includes("verified commit: old-verified-main."));
+});
+
+test("bootstrap uses an available canvas without reload or disk writes and diagnoses trust blockers", async () => {
+  const guide = await readFile(new URL("BOOTSTRAP.md", import.meta.url), "utf8");
+  assert.match(guide, /git show <verified-commit>:\.github\/extensions\/demo-launcher\/BOOTSTRAP\.md/);
+  assert.match(guide, /verify the expected origin before fetching/);
+  assert.match(guide, /Do not restore, rewrite, or overwrite extension files/);
+  assert.match(guide, /Do not switch branches, modify the main checkout, commit, push, install software, create another repository, or run a demo automatically/);
+  assert.match(guide, /If `copilot-demos` is already declared[\s\S]*`list_canvas_capabilities`[\s\S]*Do not reload or require lifecycle tools/);
+  assert.match(guide, /Zero lifecycle tools is not itself a canvas failure/);
+  assert.match(guide, /api_tool\.list_resources[\s\S]*extensions_reload[\s\S]*extensions_manage/);
+  assert.match(guide, /Only reload if the provider is unavailable and `extensions_reload` was actually discovered/);
+  assert.match(guide, /user must review and accept[\s\S]*Never accept on their behalf or bypass the trust gate/);
+  assert.match(guide, /`list_canvas_capabilities`[\s\S]*`open_canvas`[\s\S]*`get_session`[\s\S]*`bind_session`/);
+  assert.match(guide, /Read `get_state` again to confirm registration/);
+});
+
+for (const status of [403, 404]) {
+  test(`published runtime readback HTTP ${status} keeps the app launch unavailable`, async (t) => {
     const h = await harness(t);
-    h.remote.failure = (method, path) => method === "POST" && path.endsWith("/merges")
-      ? new GitHubError(`Merge rejected (${status})`, status) : null;
-    await assert.rejects(h.create(), /Merge rejected/);
+    h.remote.failure = (method, path) => method === "GET" && path.includes("/contents/.github/extensions/demo-launcher")
+      ? new GitHubError(`Runtime unavailable (${status})`, status) : null;
+    await assert.rejects(h.create(), /Runtime unavailable/);
     const environment = await h.current();
     assert.equal(environment.launcherReady, undefined);
-    assert.equal(environment.launcherMergeCommit, undefined);
+    assert.equal(environment.launcherVerifiedCommit, undefined);
     assert.equal(launchUrl(environment), null);
     assert.equal(h.remote.mainSha, "base-sha");
     assert.deepEqual((await h.source.state()).environments, []);
   });
 }
 
-for (const failure of ["unmerged main", "wrong main contents", "unrelated branch changes"]) {
-  test(`${failure} cannot satisfy the merge readiness gate`, async (t) => {
+for (const failure of ["missing published guide", "invalid published hash", "inherited runtime mismatch"]) {
+  test(`${failure} cannot satisfy the inherited-runtime readiness gate`, async (t) => {
     const h = await harness(t);
     h.source.api = async (method, path, body) => {
       const result = await h.api(method, path, body);
-      if (failure === "unmerged main" && path.endsWith("/git/ref/heads/main")) {
-        return { object: { sha: "base-sha" } };
+      if (path === `repos/${TEMPLATE}/contents/.github/extensions/demo-launcher?ref=${h.remote.templateSha}`) {
+        if (failure === "missing published guide") return result.filter(({ path }) => !path.endsWith("/BOOTSTRAP.md"));
+        if (failure === "invalid published hash") result[0].sha = "";
       }
-      if (failure === "wrong main contents" && path.includes("/contents/.github/extensions/demo-launcher?ref=merge-")) {
-        result[0].sha = "different-canvas";
-      }
-      if (failure === "unrelated branch changes" && path.includes("/compare/base-sha...")) {
-        result.files.push({ filename: "demo-security/preview.mjs", status: "added" });
+      if (failure === "inherited runtime mismatch" && path.includes("/contents/.github/extensions/demo-launcher?ref=base-sha")) {
+        result[0].sha = "a".repeat(40);
       }
       return result;
     };
-    await assert.rejects(h.create(), /merge is not visible|verification failed|outside the canvas runtime/);
+    await assert.rejects(h.create(), /verification failed/);
     const environment = await h.current();
     assert.equal(environment.launcherReady, undefined);
     assert.equal(launchUrl(environment), null);
-    if (failure === "unrelated branch changes") {
-      assert.equal(h.calls.filter(({ path }) => path.endsWith("/merges")).length, 0);
-    }
+    assert.equal(h.calls.filter(({ path }) => path.endsWith("/merges")).length, 0);
   });
 }
 
-test("readiness waits for main to reflect the completed merge", async (t) => {
-  const h = await harness(t);
-  let delayedReads = 0;
-  let waits = 0;
-  h.source.sleep = async () => { waits += 1; };
-  h.source.api = async (method, path, body) => {
-    const result = await h.api(method, path, body);
-    if (path.endsWith("/git/ref/heads/main") && h.remote.mainSha !== "base-sha" && delayedReads++ < 2) {
-      return { object: { sha: "base-sha" } };
-    }
-    return result;
-  };
-  await h.create();
-  assert.equal(waits, 2);
-  assert.equal((await h.current()).launcherReady, true);
-});
-
-test("a lost merge response is recovered by verifying ancestry without merging twice", async (t) => {
+test("a lost runtime readback can be retried without any new remote writes", async (t) => {
   const h = await harness(t);
   h.source.api = async (method, path, body) => {
     const result = await h.api(method, path, body);
-    if (method === "POST" && path.endsWith("/merges")) throw new Error("Lost merge response");
+    if (method === "GET" && path.includes("/contents/.github/extensions/demo-launcher?ref=base-sha")) throw new Error("Lost runtime response");
     return result;
   };
-  await assert.rejects(h.create(), /Lost merge response/);
+  await assert.rejects(h.create(), /Lost runtime response/);
+  const writes = h.calls.filter(({ method }) => method !== "GET").length;
   const state = await h.store.read();
-  await provisionLauncher(state.environments[0], { api: h.api, save: () => h.store.write(state) });
+  await verifyLauncher(state.environments[0], { api: h.api, save: () => h.store.write(state) });
   assert.equal((await h.current()).launcherReady, true);
-  assert.equal(h.calls.filter(({ method, path }) => method === "POST" && path.endsWith("/merges")).length, 1);
+  assert.equal(h.calls.filter(({ method }) => method !== "GET").length, writes);
 });
 
 for (const repo of SOURCE_REPOSITORIES) {
-  test(`${repo} can never be a canvas merge target`, async () => {
+  test(`${repo} can never be treated as a disposable canvas instance`, async () => {
     const environment = { id: "source-attempt", repo, defaultBranch: "main" };
     const calls = [];
     const api = async (method, path) => {
       calls.push({ method, path });
       return { full_name: repo, description: `Disposable Copilot demo [${environment.id}]`, private: false, fork: false };
     };
-    await assert.rejects(provisionLauncher(environment, { api, save: async () => {} }), /identity/);
+    await assert.rejects(verifyLauncher(environment, { api, save: async () => {} }), /identity/);
     assert.deepEqual(calls, [{ method: "GET", path: `repos/${repo}` }]);
   });
 
@@ -244,11 +253,11 @@ test("legacy personal receipts still route cleanup to the original source and cr
   assert.equal(h.calls.filter(({ method }) => method === "DELETE").length, 1);
 });
 
-test("a changed demo default branch cannot redirect the canvas merge", async (t) => {
+test("a changed demo default branch cannot redirect runtime verification", async (t) => {
   const h = await harness(t);
   h.source.api = async (method, path, body) => {
     const result = await h.api(method, path, body);
-    if (method === "POST" && body?.ref === `refs/heads/${LAUNCH_BRANCH}`) {
+    if (method === "GET" && path.includes("/contents/.github/extensions/demo-launcher?ref=base-sha")) {
       h.remote.repository.default_branch = "demo/copilot-autofix";
     }
     return result;
@@ -257,14 +266,15 @@ test("a changed demo default branch cannot redirect the canvas merge", async (t)
   assert.equal(h.calls.filter(({ path }) => path.endsWith("/merges")).length, 0);
 });
 
-for (const failure of ["missing file", "wrong contents", "symlink", "permission error"]) {
+for (const failure of ["missing file", "missing bootstrap guide", "wrong contents", "symlink", "permission error"]) {
   test(`launcher readback rejects ${failure} instead of advertising a ready canvas`, async (t) => {
     const h = await harness(t);
     h.source.api = async (method, path, body) => {
       const result = await h.api(method, path, body);
-      if (!path.includes("/contents/.github/extensions/demo-launcher?ref=")) return result;
+      if (!path.includes("/contents/.github/extensions/demo-launcher?ref=base-sha")) return result;
       if (failure === "permission error") throw new GitHubError("Forbidden to read published files", 403);
       if (failure === "missing file") return result.slice(1);
+      if (failure === "missing bootstrap guide") return result.filter(({ path }) => !path.endsWith("/BOOTSTRAP.md"));
       if (failure === "wrong contents") result[0].sha = "not-the-uploaded-file";
       if (failure === "symlink") result[0].type = "symlink";
       return result;
@@ -272,7 +282,7 @@ for (const failure of ["missing file", "wrong contents", "symlink", "permission 
     await assert.rejects(h.create(), /verification failed|Forbidden to read/);
     const environment = await h.current();
     assert.equal(environment.launcherReady, undefined);
-    assert.equal(environment.step, "Verifying the published canvas files");
+    assert.equal(environment.step, "Verifying the published template canvas");
     const demo = await h.makeController(environment.repo).state();
     assert.equal(demo.environments[0].launchUrl, null);
     assert.deepEqual((await h.source.state()).environments, []);
@@ -284,33 +294,11 @@ test("launcher readback rejects a branch that moved before launch", async (t) =>
   const h = await harness(t);
   h.source.api = async (method, path, body) => {
     const result = await h.api(method, path, body);
-    if (method === "POST" && body?.ref === `refs/heads/${LAUNCH_BRANCH}`) result.object.sha = "unexpected-commit";
+    if (method === "GET" && path.includes("/contents/.github/extensions/demo-launcher?ref=base-sha")) h.remote.mainSha = "changed-main";
     return result;
   };
-  await assert.rejects(h.create(), /no longer points/);
+  await assert.rejects(h.create(), /default branch changed during canvas verification/);
   assert.equal((await h.current()).launcherReady, undefined);
-});
-
-test("a lost launcher ref response resumes without duplicating commits or overwriting a changed branch", async (t) => {
-  const h = await harness(t);
-  const api = h.source.api;
-  h.source.api = async (method, path, body) => {
-    const result = await api(method, path, body);
-    if (method === "POST" && body?.ref === `refs/heads/${LAUNCH_BRANCH}`) {
-      h.source.api = api;
-      throw new Error("Lost launcher ref response");
-    }
-    return result;
-  };
-  await assert.rejects(h.create(), /Lost launcher/);
-  const saved = await h.store.read();
-  await provisionLauncher(saved.environments[0], { api, save: () => h.store.write(saved) });
-  assert.equal(h.calls.filter(({ method, path }) => method === "POST" && path.endsWith("/git/commits")).length, 1);
-  const environment = await h.current();
-  assert.equal(environment.launcherReady, true);
-  delete environment.launcherReady;
-  h.remote.commits.get(environment.launcherCommit).message = "unrelated work";
-  await assert.rejects(provisionLauncher(environment, { api, save: async () => {} }), /will not be overwritten/);
 });
 
 test("cleanup needs confirmed names, runs remote deletion only in core, and cannot report forwarding as completion", async (t) => {

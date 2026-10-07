@@ -51,7 +51,9 @@ test("core canvas launches a fresh instance each time and returns to an empty Cr
   assert.match(target.searchParams.get("repo"), /^GitHubEBCDemos\/tailspin-demo-/);
   assert.equal(target.searchParams.get("branch"), "main");
   assert.match(target.searchParams.get("prompt"), /Open the Copilot demos canvas/);
-  assert.match(target.searchParams.get("prompt"), /bind_session/);
+  assert.doesNotMatch(target.searchParams.get("prompt"), /extensions_reload|extensions_manage/);
+  assert.match(target.searchParams.get("prompt"), /BOOTSTRAP\.md from that commit using git show/);
+  assert.ok(target.searchParams.get("prompt").length <= 750);
   assert.equal(h.messages.length, 0);
   await expect(page.locator("#demos")).toBeHidden();
   await expect(page.locator("#environment-info")).toBeHidden();
@@ -179,11 +181,11 @@ test("a newly created CodeQL run's 404 keeps the spinner active and launches the
   await popup.close();
 });
 
-test("Open in Copilot app stays hidden until the canvas is merged and verified on main", async (t) => {
+test("Open in Copilot app stays hidden until the inherited canvas is verified on main", async (t) => {
   const h = await harness(t);
   const gate = Promise.withResolvers();
   h.source.api = async (method, path, body) => {
-    if (method === "POST" && path.endsWith("/merges")) await gate.promise;
+    if (method === "GET" && path.includes("/contents/.github/extensions/demo-launcher?ref=base-sha")) await gate.promise;
     return h.api(method, path, body);
   };
   const { page, url } = await canvas(t, h.source);
@@ -191,11 +193,11 @@ test("Open in Copilot app stays hidden until the canvas is merged and verified o
   await page.goto(url);
   try {
     await page.getByTestId("create-environment").click();
-    await expect(page.locator("#setup-status")).toContainText("Merging the canvas setup");
+    await expect(page.locator("#setup-status")).toContainText("Verifying the published template canvas");
     await expect(page.getByTestId("open-app")).toBeHidden();
     await expect(page.getByTestId("create-environment")).toBeDisabled();
     const environment = await h.current();
-    assert.ok(environment.launcherCommit);
+    assert.equal(environment.launcherCommit, undefined);
     assert.equal(environment.launcherReady, undefined);
     assert.equal(h.remote.mainSha, "base-sha");
   } finally {
@@ -204,7 +206,7 @@ test("Open in Copilot app stays hidden until the canvas is merged and verified o
   await expect(page.getByTestId("open-app")).toBeVisible();
   const target = new URL(new URL(await page.getByTestId("open-app").getAttribute("href")).searchParams.get("open"));
   assert.equal(target.searchParams.get("branch"), "main");
-  assert.equal((await h.current()).launcherMergeCommit, h.remote.mainSha);
+  assert.equal((await h.current()).launcherVerifiedCommit, h.remote.mainSha);
   await expect(page.getByTestId("create-environment")).toBeEnabled();
 });
 

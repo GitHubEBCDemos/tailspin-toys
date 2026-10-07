@@ -21,7 +21,7 @@ test("creates unique repository names with no name or approval input", async (t)
   }
 });
 
-test("creates isolated public environment, configures CodeQL before PR, and merges only canvas setup", async (t) => {
+test("creates isolated public environment, configures CodeQL before PR, and never merges canvas setup", async (t) => {
   const h = await harness(t);
   h.remote.initializationDelays = 2;
   const created = await h.create();
@@ -44,8 +44,8 @@ test("creates isolated public environment, configures CodeQL before PR, and merg
   assert.ok(writes[4].body.body.includes("never merge or deploy"));
   assert.equal(h.messages.length, 0);
   assert.equal(environment.launcherReady, true);
-  assert.equal(environment.launcherMergeCommit, h.remote.mainSha);
-  assert.equal(writes.filter(({ path }) => path.endsWith("/merges")).length, 1);
+  assert.equal(environment.launcherVerifiedCommit, h.remote.mainSha);
+  assert.equal(writes.filter(({ path }) => path.endsWith("/merges")).length, 0);
   assert.match(created.environments[0].launchUrl, /^https:\/\/github.com\/copilot\/app\/launch/);
   assert.deepEqual((await h.source.state()).environments, []);
   assert.doesNotMatch(FIXTURE, /\.listen\s*\(/);

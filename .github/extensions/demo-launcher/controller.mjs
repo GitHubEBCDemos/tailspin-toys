@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DEMO_OWNER, SOURCE_REPOSITORIES, TEMPLATE, UPSTREAM_REPOSITORY, assertOwnedRepository, isSourceRepository, provision, scanStatus } from "./github.mjs";
 import { CI_BRANCH, ciStatus, provisionScenarios, reviewStatus, scenarioIssue } from "./scenarios.mjs";
-import { launchUrl, provisionLauncher } from "./launch.mjs";
+import { launchUrl, verifyLauncher } from "./launch.mjs";
 
 export const FEATURE_PROMPT = "Add a basic game-title search to the Tailspin Toys home page. Use a labelled search input with case-insensitive filtering, a visible result count, and a helpful no-results message. Keep the existing dark theme and responsive grid. Follow repository guidance, add data-testid attributes and focused tests, and verify the change. Do not commit, push, create an issue or PR, or install software without asking.";
 
@@ -203,7 +203,7 @@ export class Controller {
         await save();
         await provision(environment, { api: this.api, save, sleep: this.sleep });
         await provisionScenarios(environment, { api: this.api, save });
-        await provisionLauncher(environment, { api: this.api, save, sleep: this.sleep });
+        await verifyLauncher(environment, { api: this.api, save });
       }, id);
     } catch (error) {
       if (environment) {

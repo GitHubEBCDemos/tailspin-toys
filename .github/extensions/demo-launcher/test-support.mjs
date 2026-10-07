@@ -1,9 +1,10 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { Controller, Store } from "./controller.mjs";
 import { BRANCH, FIXTURE_PATH, GitHubError, TEMPLATE } from "./github.mjs";
+import { RUNTIME_FILES } from "./launch.mjs";
 
 export async function harness(t) {
   const directory = await mkdtemp(join(tmpdir(), "copilot-demos-test-"));
@@ -16,7 +17,14 @@ export async function harness(t) {
     failure: null, setupRun: null, languageDelays: 0,
     branches: new Map(), files: new Map(), issues: [], nextNumber: 1,
     ciRuns: [], ciJobs: [], reviewUsers: [], reviews: [], reviewRequests: [],
-    commits: new Map(), trees: [], mainSha: "base-sha", mergedLaunchers: new Set(),
+    mainSha: "base-sha", templateSha: "template-sha", runtimeFiles: [],
+    templateFiles: await Promise.all(RUNTIME_FILES.map(async (file) => {
+      const content = await readFile(new URL(file, import.meta.url), "utf8");
+      return {
+        path: `.github/extensions/demo-launcher/${file}`, type: "file",
+        sha: createHash("sha1").update(`blob ${Buffer.byteLength(content)}\0`).update(content).digest("hex"),
+      };
+    })),
   };
   const api = async (method, path, body) => {
     calls.push({ method, path, body });
@@ -25,7 +33,11 @@ export async function harness(t) {
       if (error) throw error;
     }
     if (method === "GET" && path === "user") return { login: "presenter" };
-    if (method === "GET" && path === `repos/${TEMPLATE}`) return { is_template: true, private: false };
+    if (method === "GET" && path === `repos/${TEMPLATE}`) return { is_template: true, private: false, default_branch: "main" };
+    if (method === "GET" && path === `repos/${TEMPLATE}/git/ref/heads/main`) return { object: { sha: remote.templateSha } };
+    if (method === "GET" && path === `repos/${TEMPLATE}/contents/.github/extensions/demo-launcher?ref=${remote.templateSha}`) {
+      return remote.templateFiles.map((file) => ({ ...file }));
+    }
     if (method === "POST" && path === `repos/${TEMPLATE}/generate`) {
       remote.repository = { id: 101, full_name: `${body.owner}/${body.name}`, description: body.description, default_branch: "main", private: body.private, fork: false };
       remote.branch = null;
@@ -37,7 +49,7 @@ export async function harness(t) {
       remote.files.clear();
       remote.nextNumber = 1;
       remote.mainSha = "base-sha";
-      remote.mergedLaunchers.clear();
+      remote.runtimeFiles = remote.templateFiles.map((file) => ({ ...file }));
       return remote.repository;
     }
     const prefix = `repos/${remote.repository?.full_name || "presenter/demo-fresh"}`;
@@ -49,40 +61,9 @@ export async function harness(t) {
       remote.repository = null;
       return null;
     }
-    if (method === "GET" && path === `${prefix}/git/commits/base-sha`) return { tree: { sha: "base-tree" } };
-    if (method === "POST" && path === `${prefix}/git/trees`) {
-      remote.trees.push(body);
-      return { sha: `tree-${remote.trees.length}` };
-    }
-    if (method === "POST" && path === `${prefix}/git/commits`) {
-      const sha = `commit-${remote.commits.size + 1}`;
-      remote.commits.set(sha, body);
-      return { sha };
-    }
-    if (method === "GET" && path.startsWith(`${prefix}/git/commits/`)) return remote.commits.get(path.slice(`${prefix}/git/commits/`.length));
     if (method === "GET" && path === `${prefix}/git/ref/heads/main`) {
       if (remote.initializationDelays-- > 0) throw new GitHubError("Empty repository", 409);
       return { object: { sha: remote.mainSha } };
-    }
-    if (method === "POST" && path === `${prefix}/merges`) {
-      if (body.base !== "main" || !remote.commits.has(body.head)) throw new Error("Unexpected merge target");
-      const sha = `merge-${body.head}`;
-      remote.commits.set(sha, { tree: remote.commits.get(body.head).tree, parents: [remote.mainSha, body.head] });
-      remote.mainSha = sha;
-      remote.mergedLaunchers.add(body.head);
-      return { sha };
-    }
-    if (method === "GET" && path.startsWith(`${prefix}/compare/`)) {
-      const [base, head] = path.slice(`${prefix}/compare/`.length).split("...");
-      if (base === head) return { status: "identical", files: [] };
-      if (head === remote.mainSha && remote.mergedLaunchers.has(base)) return { status: "ahead", files: [] };
-      if (base === remote.mainSha && remote.mergedLaunchers.has(head)) return { status: "behind", files: [] };
-      if (base === "base-sha" && remote.commits.has(head)) {
-        const tree = remote.trees[Number(remote.commits.get(head).tree.slice("tree-".length)) - 1];
-        return { status: "ahead", files: tree.tree.map(({ path }) => ({ filename: path, status: "added" })) };
-      }
-      if (head === "base-sha" && remote.commits.has(base)) return { status: "behind", files: [] };
-      throw new Error(`Unexpected fake comparison: ${base}...${head}`);
     }
     if (path === `${prefix}/code-scanning/default-setup`) {
       if (method === "PATCH") {
@@ -119,12 +100,8 @@ export async function harness(t) {
     }
     if (method === "GET" && path.startsWith(`${prefix}/contents/.github/extensions/demo-launcher?ref=`)) {
       const ref = new URL(`https://api.github.com/${path}`).searchParams.get("ref");
-      const commit = remote.commits.get(ref);
-      const tree = remote.trees[Number(commit.tree.slice("tree-".length)) - 1];
-      return tree.tree.map(({ path, content }) => ({
-        path, type: "file",
-        sha: createHash("sha1").update(`blob ${Buffer.byteLength(content)}\0`).update(content).digest("hex"),
-      }));
+      if (ref !== remote.mainSha) throw new GitHubError("Commit not found", 404);
+      return remote.runtimeFiles.map((file) => ({ ...file }));
     }
     if (path.startsWith(`${prefix}/contents/`)) {
       const url = new URL(`https://api.github.com/${path}`);
