@@ -38,8 +38,8 @@ export async function harness(t) {
     if (method === "GET" && path === `repos/${TEMPLATE}/contents/.github/extensions/demo-launcher?ref=${remote.templateSha}`) {
       return remote.templateFiles.map((file) => ({ ...file }));
     }
-    if (method === "POST" && path === `repos/${TEMPLATE}/generate`) {
-      remote.repository = { id: 101, full_name: `${body.owner}/${body.name}`, description: body.description, default_branch: "main", private: body.private, visibility: body.private ? "private" : "public", fork: false };
+    if (method === "CLI" && path === "gh repo create") {
+      remote.repository = { id: 101, full_name: `${body.owner}/${body.name}`, description: body.description, default_branch: "main", private: true, visibility: "internal", fork: false };
       remote.branch = null;
       remote.fixture = null;
       remote.configured = false;
@@ -55,12 +55,6 @@ export async function harness(t) {
     const prefix = `repos/${remote.repository?.full_name || "presenter/demo-fresh"}`;
     if (method === "GET" && path === prefix) {
       if (!remote.repository) throw new GitHubError("Not found", 404);
-      return remote.repository;
-    }
-    if (method === "PATCH" && path === prefix) {
-      if (body.visibility !== "internal") throw new Error("Expected an internal visibility update.");
-      remote.repository.visibility = body.visibility;
-      remote.repository.private = body.visibility !== "public";
       return remote.repository;
     }
     if (method === "DELETE" && path === prefix) {
@@ -157,18 +151,25 @@ export async function harness(t) {
     throw new Error(`Unexpected fake GitHub request: ${method} ${path}`);
   };
   const store = new Store(directory);
-  const makeController = (repo = TEMPLATE, runtimeId = "source-session") => new Controller({
-    store, api, sleep: async () => {},
-    repo, sessionId: () => runtimeId,
-    send: async (options) => {
-      messages.push(options);
-      return `message-${messages.length}`;
-    },
-    requestReview: async (repo, number) => {
-      remote.reviewRequests.push({ repo, number });
-      remote.reviewUsers = [{ login: "copilot-pull-request-reviewer[bot]", type: "Bot" }];
-    },
-  });
+  const makeController = (repo = TEMPLATE, runtimeId = "source-session") => {
+    const controller = new Controller({
+      store, api, sleep: async () => {},
+      createRepository: async (environment) => controller.api("CLI", "gh repo create", {
+        owner: environment.owner, name: environment.name, visibility: "internal", template: TEMPLATE,
+        description: `Disposable Copilot demo [${environment.id}]`,
+      }),
+      repo, sessionId: () => runtimeId,
+      send: async (options) => {
+        messages.push(options);
+        return `message-${messages.length}`;
+      },
+      requestReview: async (repo, number) => {
+        remote.reviewRequests.push({ repo, number });
+        remote.reviewUsers = [{ login: "copilot-pull-request-reviewer[bot]", type: "Bot" }];
+      },
+    });
+    return controller;
+  };
   const source = makeController();
   let controller = source;
   const create = () => source.create();

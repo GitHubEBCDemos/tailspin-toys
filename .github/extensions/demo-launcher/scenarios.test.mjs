@@ -55,7 +55,7 @@ for (const resource of ["issue", "review", "ci"]) {
     assert.equal(h.remote.pulls.length, 3);
     assert.equal((await h.current()).scenariosReady, true);
     assert.notEqual((await h.current()).id, failed.id);
-    assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 2);
+    assert.equal(h.calls.filter(({ path }) => path === "gh repo create").length, 2);
   });
 }
 

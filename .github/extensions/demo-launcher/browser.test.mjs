@@ -106,7 +106,7 @@ test("Create only provisions; one explicit Open session action launches the veri
   await expect(page.getByTestId("open-app")).toBeVisible();
   assertSessionLaunch(await page.getByTestId("open-app").getAttribute("href"), (await h.current()).repo);
   assert.notEqual((await h.current()).repo, first.repo);
-  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 2);
+  assert.equal(h.calls.filter(({ path }) => path === "gh repo create").length, 2);
   await expect(page.getByTestId("create-environment")).toBeEnabled();
   await expect(page.locator("#environment-info")).toBeVisible();
   const nextTarget = new URL(new URL(await page.getByTestId("open-app").getAttribute("href")).searchParams.get("open"));
@@ -164,7 +164,7 @@ test("Create starts fresh after failure and exposes Open session only after prov
   assert.notEqual((await h.current()).repo, repository);
   assert.equal((await h.source.state()).environments.length, 0);
   assert.equal((await h.store.read()).environments.length, 2);
-  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 2);
+  assert.equal(h.calls.filter(({ path }) => path === "gh repo create").length, 2);
   await expect(page.locator("#environment-info")).toBeVisible();
   assertSessionLaunch(await page.getByTestId("open-app").getAttribute("href"), (await h.current()).repo);
   assert.equal(context.pages().length, 1);
@@ -216,7 +216,7 @@ test("another Create hides the previous launch link until the new repository is 
   await expect(page.getByTestId("open-app")).toBeVisible();
   assertSessionLaunch(await page.getByTestId("open-app").getAttribute("href"), (await h.current()).repo);
   assert.notEqual((await h.current()).repo, previousRepo);
-  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 2);
+  assert.equal(h.calls.filter(({ path }) => path === "gh repo create").length, 2);
   assert.equal(h.messages.length, 0);
 });
 
@@ -245,7 +245,7 @@ test("a newly created CodeQL run's 404 keeps Open session hidden without opening
   }
   await expect(page.getByTestId("open-app")).toBeVisible();
   assertSessionLaunch(await page.getByTestId("open-app").getAttribute("href"), (await h.current()).repo);
-  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 1);
+  assert.equal(h.calls.filter(({ path }) => path === "gh repo create").length, 1);
   assert.equal((await h.store.read()).environments.length, 1);
   await expect(page.getByRole("alert")).toBeHidden();
   await expect(page.getByTestId("create-environment")).toBeEnabled();

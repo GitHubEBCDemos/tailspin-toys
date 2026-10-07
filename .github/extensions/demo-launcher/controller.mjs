@@ -105,12 +105,13 @@ For this feature request, record done only after implementation and verification
 }
 
 export class Controller {
-  constructor({ store, api, send, sleep, requestReview, repo, sessionId }) {
+  constructor({ store, api, send, sleep, createRepository, requestReview, repo, sessionId }) {
     if (!repo || typeof sessionId !== "function") throw new Error("A workspace repository and current session identity are required.");
     this.store = store;
     this.api = api;
     this.send = send;
     this.sleep = sleep;
+    this.createRepository = createRepository;
     this.requestReview = requestReview;
     this.repo = repo;
     this.sessionId = sessionId;
@@ -201,7 +202,7 @@ export class Controller {
         };
         state.environments.push(environment);
         await save();
-        await provision(environment, { api: this.api, save, sleep: this.sleep });
+        await provision(environment, { api: this.api, save, sleep: this.sleep, createRepository: this.createRepository });
         await provisionScenarios(environment, { api: this.api, save });
         await verifyLauncher(environment, { api: this.api, save });
       }, id);

@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { Controller, FEATURE_PROMPT, Store } from "./controller.mjs";
-import { BRANCH, DEMO_OWNER, FIXTURE, FIXTURE_PATH, GitHubError, RULE, TEMPLATE, provision, pullRequestBody } from "./github.mjs";
+import { BRANCH, DEMO_OWNER, FIXTURE, FIXTURE_PATH, GitHubError, RULE, TEMPLATE, createDemoRepository, provision, pullRequestBody } from "./github.mjs";
 import { startServer } from "./server.mjs";
 import { harness } from "./test-support.mjs";
 
@@ -35,19 +35,19 @@ test("creates an internal environment without public exposure, configures CodeQL
   assert.equal(h.remote.repository.private, true);
   assert.equal(h.remote.fixture, Buffer.from(FIXTURE).toString("base64"));
   const writes = h.calls.filter((call) => call.method !== "GET");
-  assert.deepEqual(writes.slice(0, 6).map((call) => call.method), ["POST", "PATCH", "PATCH", "POST", "PUT", "POST"]);
+  assert.deepEqual(writes.slice(0, 5).map((call) => call.method), ["CLI", "PATCH", "POST", "PUT", "POST"]);
   assert.equal(writes.filter((call) => call.path.endsWith("/pulls")).length, 3);
   assert.equal(writes.filter((call) => call.path.endsWith("/issues")).length, 1);
   assert.ok(writes.every((call) => !call.body?.branch || call.body.branch.startsWith("demo/")));
-  assert.equal(writes[0].path, `repos/${TEMPLATE}/generate`);
+  assert.equal(writes[0].path, "gh repo create");
   assert.equal(writes[0].body.owner, DEMO_OWNER);
-  assert.equal(writes[0].body.private, true);
-  assert.equal(writes[1].path, `repos/${environment.repo}`);
-  assert.deepEqual(writes[1].body, { visibility: "internal" });
-  assert.equal(writes[2].path, `repos/${environment.repo}/code-scanning/default-setup`);
-  assert.equal(writes[3].body.ref, `refs/heads/${BRANCH}`);
-  assert.equal(writes[4].body.branch, BRANCH);
-  assert.ok(writes[5].body.body.includes("never merge or deploy"));
+  assert.equal(writes[0].body.visibility, "internal");
+  assert.equal(writes[0].body.template, TEMPLATE);
+  assert.equal(writes[1].path, `repos/${environment.repo}/code-scanning/default-setup`);
+  assert.equal(writes[2].body.ref, `refs/heads/${BRANCH}`);
+  assert.equal(writes[3].body.branch, BRANCH);
+  assert.ok(writes[4].body.body.includes("never merge or deploy"));
+  assert.equal(h.calls.some(({ method, path }) => method === "PATCH" && path === `repos/${environment.repo}`), false);
   assert.equal(h.messages.length, 0);
   assert.equal(environment.launcherReady, true);
   assert.equal(environment.launcherVerifiedCommit, h.remote.mainSha);
@@ -58,34 +58,28 @@ test("creates an internal environment without public exposure, configures CodeQL
   assert.match(FIXTURE, /searchParams\.get/);
 });
 
-for (const status of [403, 422]) {
-  test(`internal visibility HTTP ${status} stops creation before CodeQL, fixtures, or launch`, async (t) => {
-    const h = await harness(t);
-    h.remote.failure = (method, _path, body) => method === "PATCH" && body?.visibility === "internal"
-      ? new GitHubError(`Internal visibility unavailable (${status})`, status) : null;
-    await assert.rejects(h.create(), /Internal visibility unavailable/);
-    const environment = await h.current();
-    assert.equal(environment.visibility, "internal");
-    assert.equal(environment.repositoryId, h.remote.repository.id);
-    assert.equal(h.remote.repository.visibility, "private");
-    assert.equal(h.remote.repository.private, true);
-    assert.equal(environment.githubReady, false);
-    assert.equal(environment.launcherReady, undefined);
-    assert.match(environment.error, /Internal visibility unavailable/);
-    assert.equal(h.calls.some(({ path }) => path.includes("/code-scanning/")), false);
-    assert.equal(h.remote.pulls.length, 0);
-    assert.deepEqual(h.calls.filter(({ method }) => method !== "GET").map(({ body }) => body.private ?? body.visibility), [true, "internal"]);
-  });
-}
+test("the CLI creates directly from the published template with internal visibility and no local clone or push", async () => {
+  const name = "tailspin-demo-2026-10-07-1234abcd";
+  const environment = { id: "receipt", owner: DEMO_OWNER, name, repo: `${DEMO_OWNER}/${name}`, visibility: "internal" };
+  const calls = [];
+  await createDemoRepository(environment, async (...args) => { calls.push(args); });
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].slice(0, 2), ["gh", ["repo", "create", environment.repo, "--template", TEMPLATE, "--internal", "--description", "Disposable Copilot demo [receipt]"]]);
+  assert.equal(calls[0][2].env.GH_HOST, "github.com");
+  assert.equal(calls[0][2].env.GH_PROMPT_DISABLED, "1");
+  await assert.rejects(createDemoRepository(environment, async () => { throw Object.assign(new Error("Exit 1"), { stderr: "Organization policy denied internal creation" }); }), /Organization policy denied internal creation/);
+  for (const invalid of [{ owner: "presenter" }, { repo: TEMPLATE }, { visibility: "public" }, { name: "--bad-name" }]) {
+    await assert.rejects(createDemoRepository({ ...environment, ...invalid }, async () => assert.fail("Must not execute gh")), /requires a generated repository/);
+  }
+});
 
 for (const visibility of ["private", "public", undefined]) {
   test(`unconfirmed internal visibility (${visibility}) cannot satisfy provisioning`, async (t) => {
     const h = await harness(t);
     h.source.api = async (method, path, body) => {
       const result = await h.api(method, path, body);
-      if (method === "PATCH" && body?.visibility === "internal") {
-        h.remote.repository.visibility = visibility;
-        h.remote.repository.private = visibility !== "public";
+      if (method === "GET" && result === h.remote.repository && result) {
+        return { ...result, visibility, private: visibility !== "public" };
       }
       return result;
     };
@@ -95,23 +89,6 @@ for (const visibility of ["private", "public", undefined]) {
     assert.equal(h.remote.pulls.length, 0);
   });
 }
-
-test("a lost visibility response is recoverable without recreating the repository or repeating the visibility update", async (t) => {
-  const h = await harness(t);
-  h.source.api = async (method, path, body) => {
-    const result = await h.api(method, path, body);
-    if (method === "PATCH" && body?.visibility === "internal") throw new Error("Lost visibility response");
-    return result;
-  };
-  await assert.rejects(h.create(), /Lost visibility response/);
-  const environment = await h.current();
-  assert.equal(environment.repositoryId, h.remote.repository.id);
-  assert.equal(h.remote.repository.visibility, "internal");
-  await provision(environment, { api: h.api, save: async () => {} });
-  assert.equal(environment.githubReady, true);
-  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 1);
-  assert.equal(h.calls.filter(({ body }) => body?.visibility === "internal").length, 1);
-});
 
 test("legacy public demo receipts remain usable without changing their visibility", async (t) => {
   const h = await harness(t);
@@ -147,7 +124,7 @@ test("Create starts a new repository after a lost response and retains the faile
   const api = h.controller.api;
   h.controller.api = async (method, path, body) => {
     const result = await api(method, path, body);
-    if (path.endsWith("/generate")) {
+    if (path === "gh repo create") {
       h.controller.api = api;
       throw new Error("Connection lost after creation");
     }
@@ -159,7 +136,7 @@ test("Create starts a new repository after a lost response and retains the faile
   assert.equal((await h.current()).githubReady, true);
   assert.notEqual((await h.current()).repo, failed.repo);
   assert.match((await h.store.read()).environments[0].error, /Connection lost/);
-  assert.equal(h.calls.filter((call) => call.path.endsWith("/generate")).length, 2);
+  assert.equal(h.calls.filter((call) => call.path === "gh repo create").length, 2);
 });
 
 test("failed CodeQL setup does not become the next Create target", async (t) => {
@@ -171,7 +148,7 @@ test("failed CodeQL setup does not become the next Create target", async (t) => 
   h.remote.failure = null;
   await h.create();
   assert.equal(h.remote.pulls.length, 3);
-  assert.equal(h.calls.filter((call) => call.path.endsWith("/generate")).length, 2);
+  assert.equal(h.calls.filter((call) => call.path === "gh repo create").length, 2);
   assert.equal((await h.store.read()).environments.length, 2);
   assert.equal(h.messages.length, 0);
 });
@@ -192,10 +169,10 @@ test("Create stays in the organization when the signed-in account changes", asyn
 
 test("organization creation failure never falls back to a personal repository", async (t) => {
   const h = await harness(t);
-  h.remote.failure = (method, path) => method === "POST" && path.endsWith("/generate")
+  h.remote.failure = (method, path) => method === "CLI" && path === "gh repo create"
     ? new GitHubError("Organization repository creation is forbidden", 403) : null;
   await assert.rejects(h.create(), /Organization repository creation is forbidden/);
-  const creations = h.calls.filter(({ path }) => path.endsWith("/generate"));
+  const creations = h.calls.filter(({ path }) => path === "gh repo create");
   assert.equal(creations.length, 1);
   assert.equal(creations[0].body.owner, DEMO_OWNER);
   assert.equal((await h.current()).owner, DEMO_OWNER);
@@ -212,9 +189,9 @@ test("Create ignores legacy pending setup and never changes that old receipt", a
   await h.create();
   assert.deepEqual((await h.store.read()).environments[0], state.environments[0]);
   assert.equal((await h.current()).sourceSessionId, "source-session");
-  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 2);
+  assert.equal(h.calls.filter(({ path }) => path === "gh repo create").length, 2);
   await h.create();
-  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 3);
+  assert.equal(h.calls.filter(({ path }) => path === "gh repo create").length, 3);
 });
 
 test("Create starts fresh after a lost PR response; changed fixtures and closed PRs remain protected", async (t) => {
@@ -276,7 +253,7 @@ test("CodeQL setup retries a newly created run's 404 and waits for successful va
   assert.equal(waits, 3);
   assert.equal(h.calls.filter(({ path }) => path.endsWith("/actions/runs/42")).length, 4);
   assert.equal(h.calls.filter(({ method, path }) => method === "PATCH" && path.endsWith("/code-scanning/default-setup")).length, 1);
-  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 1);
+  assert.equal(h.calls.filter(({ path }) => path === "gh repo create").length, 1);
   assert.equal((await h.store.read()).environments.length, 1);
   assert.equal((await h.current()).setupRunPath, null);
   assert.equal((await h.current()).launcherReady, true);
@@ -357,7 +334,7 @@ for (const delays of [2, 24]) {
     }
     assert.equal(waits, delays);
     assert.equal(h.calls.filter(({ method, path }) => method === "PATCH" && path.endsWith("/code-scanning/default-setup")).length, 1);
-    assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 1);
+    assert.equal(h.calls.filter(({ path }) => path === "gh repo create").length, 1);
   });
 }
 
@@ -370,7 +347,7 @@ test("CodeQL waits for template language indexing and records a failed attempt o
   h.remote.languageDelays = 2;
   await h.create();
   assert.equal((await h.current()).launcherReady, true);
-  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 2);
+  assert.equal(h.calls.filter(({ path }) => path === "gh repo create").length, 2);
   assert.equal(h.calls.filter(({ method, path }) => method === "PATCH" && path.endsWith("/code-scanning/default-setup")).length, 27);
 });
 

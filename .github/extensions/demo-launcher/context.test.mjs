@@ -32,7 +32,7 @@ for (const repo of SOURCE_REPOSITORIES) {
     assert.equal(environment.owner, DEMO_OWNER);
     assert.equal(environment.createdBy, "presenter");
     assert.equal(environment.sourceRepo, repo.toUpperCase());
-    assert.equal(h.calls.find(({ path }) => path.endsWith("/generate")).path, `repos/${TEMPLATE}/generate`);
+    assert.equal(h.calls.find(({ path }) => path === "gh repo create").path, "gh repo create");
     assert.deepEqual((await source.state()).environments, []);
     await h.link();
     await h.controller.cleanup(confirmation(await h.current()));

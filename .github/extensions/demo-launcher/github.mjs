@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
+import { promisify } from "node:util";
 
 export const DEMO_OWNER = "GitHubEBCDemos";
 export const TEMPLATE = `${DEMO_OWNER}/tailspin-toys`;
@@ -67,7 +68,21 @@ export function isSourceRepository(repo) {
   return SOURCE_REPOSITORIES.some((source) => source.toLowerCase() === repo.toLowerCase());
 }
 
-export function assertOwnedRepository(environment, repository, visibility = environment.visibility || "public") {
+export async function createDemoRepository(environment, run = promisify(execFile)) {
+  if (environment.owner !== DEMO_OWNER || environment.repo !== `${DEMO_OWNER}/${environment.name}` ||
+      !/^tailspin-demo-\d{4}-\d{2}-\d{2}-[a-f0-9]{8}$/.test(environment.name) || environment.visibility !== "internal") {
+    throw new Error("Internal demo creation requires a generated repository in the demo organization.");
+  }
+  try {
+    await run("gh", ["repo", "create", environment.repo, "--template", TEMPLATE, "--internal",
+      "--description", `Disposable Copilot demo [${environment.id}]`],
+    { timeout: 60_000, maxBuffer: 4_000_000, env: { ...process.env, GH_HOST: "github.com", GH_PROMPT_DISABLED: "1" } });
+  } catch (error) {
+    throw new Error(`GitHub repository creation failed: ${error.stderr?.trim() || error.message}`, { cause: error });
+  }
+}
+
+export function assertOwnedRepository(environment, repository) {
   if (repository.full_name.toLowerCase() !== environment.repo.toLowerCase() ||
       isSourceRepository(repository.full_name) ||
       repository.description !== `Disposable Copilot demo [${environment.id}]` ||
@@ -76,6 +91,7 @@ export function assertOwnedRepository(environment, repository, visibility = envi
     throw new Error("Repository identity does not match this demo's receipt. Refusing to change it.");
   }
   const actualVisibility = repository.visibility || (repository.private ? "private" : "public");
+  const visibility = environment.visibility || "public";
   if (actualVisibility !== visibility) {
     throw new Error(`Repository visibility must be ${visibility} for this demo; received ${actualVisibility}. Refusing to change it.`);
   }
@@ -109,7 +125,7 @@ export function requestCopilotReview(repo, number) {
   });
 }
 
-export async function provision(environment, { api, save, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
+export async function provision(environment, { api, save, createRepository = createDemoRepository, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) }) {
   const checkpoint = async (step) => {
     environment.step = step;
     await save();
@@ -127,22 +143,8 @@ export async function provision(environment, { api, save, sleep = (ms) => new Pr
   let repository = await optional(api, prefix);
   if (!repository) {
     if (environment.repositoryId) throw new Error("The recorded repository is missing or inaccessible. It will not be recreated automatically.");
-    await checkpoint("Creating private template repository");
-    repository = await api("POST", `repos/${TEMPLATE}/generate`, {
-      owner: environment.owner,
-      name: environment.name,
-      private: true,
-      include_all_branches: false,
-      description: `Disposable Copilot demo [${environment.id}]`,
-    });
-  }
-  if (environment.visibility === "internal" && repository.visibility !== "internal") {
-    assertOwnedRepository(environment, repository, "private");
-    environment.repositoryId = repository.id;
-    environment.defaultBranch = repository.default_branch;
-    await checkpoint("Setting internal repository visibility");
-    // Template generation only supports public/private; never expose a new demo publicly.
-    await api("PATCH", prefix, { visibility: "internal" });
+    await checkpoint("Creating internal template repository");
+    await createRepository(environment);
     repository = await api("GET", prefix);
   }
   assertOwnedRepository(environment, repository);
