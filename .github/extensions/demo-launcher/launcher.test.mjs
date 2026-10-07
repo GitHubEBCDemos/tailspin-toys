@@ -35,7 +35,7 @@ test("creates an internal environment without public exposure, configures CodeQL
   assert.equal(h.remote.repository.private, true);
   assert.equal(h.remote.fixture, Buffer.from(FIXTURE).toString("base64"));
   const writes = h.calls.filter((call) => call.method !== "GET");
-  assert.deepEqual(writes.slice(0, 5).map((call) => call.method), ["CLI", "PATCH", "POST", "PUT", "POST"]);
+  assert.deepEqual(writes.slice(0, 6).map((call) => call.method), ["CLI", "PATCH", "PATCH", "POST", "PUT", "POST"]);
   assert.equal(writes.filter((call) => call.path.endsWith("/pulls")).length, 3);
   assert.equal(writes.filter((call) => call.path.endsWith("/issues")).length, 1);
   assert.ok(writes.every((call) => !call.body?.branch || call.body.branch.startsWith("demo/")));
@@ -43,11 +43,13 @@ test("creates an internal environment without public exposure, configures CodeQL
   assert.equal(writes[0].body.owner, DEMO_OWNER);
   assert.equal(writes[0].body.visibility, "internal");
   assert.equal(writes[0].body.template, TEMPLATE);
-  assert.equal(writes[1].path, `repos/${environment.repo}/code-scanning/default-setup`);
-  assert.equal(writes[2].body.ref, `refs/heads/${BRANCH}`);
-  assert.equal(writes[3].body.branch, BRANCH);
-  assert.ok(writes[4].body.body.includes("never merge or deploy"));
-  assert.equal(h.calls.some(({ method, path }) => method === "PATCH" && path === `repos/${environment.repo}`), false);
+  assert.equal(writes[1].path, `repos/${environment.repo}`);
+  assert.deepEqual(writes[1].body, { security_and_analysis: { advanced_security: { status: "enabled" } } });
+  assert.equal(writes[2].path, `repos/${environment.repo}/code-scanning/default-setup`);
+  assert.equal(writes[3].body.ref, `refs/heads/${BRANCH}`);
+  assert.equal(writes[4].body.branch, BRANCH);
+  assert.ok(writes[5].body.body.includes("never merge or deploy"));
+  assert.equal(h.calls.some(({ method, body }) => method === "PATCH" && body?.visibility), false);
   assert.equal(h.messages.length, 0);
   assert.equal(environment.launcherReady, true);
   assert.equal(environment.launcherVerifiedCommit, h.remote.mainSha);
@@ -57,6 +59,47 @@ test("creates an internal environment without public exposure, configures CodeQL
   assert.doesNotMatch(FIXTURE, /\.listen\s*\(/);
   assert.match(FIXTURE, /searchParams\.get/);
 });
+
+for (const product of ["advanced_security", "code_security"]) {
+  for (const status of ["disabled", "enabled"]) {
+    test(`${product} is ${status === "enabled" ? "reused without an update" : "enabled and verified before CodeQL"}`, async (t) => {
+      const h = await harness(t);
+      h.source.createRepository = async (environment) => {
+        await h.api("CLI", "gh repo create", { owner: environment.owner, name: environment.name, description: `Disposable Copilot demo [${environment.id}]` });
+        h.remote.repository.security_and_analysis = { [product]: { status } };
+      };
+      await h.create();
+      const updates = h.calls.filter(({ body }) => body?.security_and_analysis);
+      assert.equal(updates.length, status === "enabled" ? 0 : 1);
+      if (updates.length) assert.deepEqual(updates[0].body, { security_and_analysis: { [product]: { status: "enabled" } } });
+      assert.equal(h.remote.repository.security_and_analysis[product].status, "enabled");
+      assert.equal((await h.current()).launcherReady, true);
+    });
+  }
+}
+
+for (const failure of ["permission", "missing settings", "missing readback", "disabled readback"]) {
+  test(`security enablement ${failure} stops before CodeQL, fixtures and launch`, async (t) => {
+    const h = await harness(t);
+    if (failure === "permission") h.remote.failure = (_method, _path, body) => body?.security_and_analysis ? new GitHubError("Security enablement forbidden", 403) : null;
+    h.source.api = async (method, path, body) => {
+      const result = await h.api(method, path, body);
+      if (method === "PATCH" && body?.security_and_analysis && failure === "disabled readback") {
+        h.remote.repository.security_and_analysis.advanced_security.status = "disabled";
+      }
+      if (method === "GET" && result === h.remote.repository && result &&
+          (failure === "missing settings" || (failure === "missing readback" && h.calls.some(({ body }) => body?.security_and_analysis)))) {
+        return { ...result, security_and_analysis: undefined };
+      }
+      return result;
+    };
+    await assert.rejects(h.create(), /forbidden|unavailable|not ready yet/);
+    assert.equal(h.calls.some(({ path }) => path.includes("/code-scanning/")), false);
+    assert.equal(h.remote.pulls.length, 0);
+    assert.equal((await h.current()).launcherReady, undefined);
+    assert.equal(h.calls.filter(({ path }) => path === "gh repo create").length, 1);
+  });
+}
 
 test("the CLI creates directly from the published template with internal visibility and no local clone or push", async () => {
   const name = "tailspin-demo-2026-10-07-1234abcd";

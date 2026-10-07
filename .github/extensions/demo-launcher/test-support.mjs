@@ -39,7 +39,10 @@ export async function harness(t) {
       return remote.templateFiles.map((file) => ({ ...file }));
     }
     if (method === "CLI" && path === "gh repo create") {
-      remote.repository = { id: 101, full_name: `${body.owner}/${body.name}`, description: body.description, default_branch: "main", private: true, visibility: "internal", fork: false };
+      remote.repository = {
+        id: 101, full_name: `${body.owner}/${body.name}`, description: body.description, default_branch: "main",
+        private: true, visibility: "internal", fork: false, security_and_analysis: { advanced_security: { status: "disabled" } },
+      };
       remote.branch = null;
       remote.fixture = null;
       remote.configured = false;
@@ -57,6 +60,11 @@ export async function harness(t) {
       if (!remote.repository) throw new GitHubError("Not found", 404);
       return remote.repository;
     }
+    if (method === "PATCH" && path === prefix) {
+      if (!body.security_and_analysis || body.visibility) throw new Error("Expected a security-only repository update.");
+      Object.assign(remote.repository.security_and_analysis, body.security_and_analysis);
+      return remote.repository;
+    }
     if (method === "DELETE" && path === prefix) {
       remote.repository = null;
       return null;
@@ -66,6 +74,10 @@ export async function harness(t) {
       return { object: { sha: remote.mainSha } };
     }
     if (path === `${prefix}/code-scanning/default-setup`) {
+      const security = remote.repository.security_and_analysis;
+      if (remote.repository.private && security?.advanced_security?.status !== "enabled" && security?.code_security?.status !== "enabled") {
+        throw new GitHubError("Advanced Security must be enabled for this repository to use code scanning.", 403);
+      }
       if (method === "PATCH") {
         if (remote.languageDelays-- > 0) throw new GitHubError("One or more languages you selected are not present in the repository.", 422);
         remote.configured = true;

@@ -160,6 +160,27 @@ export async function provision(environment, { api, save, createRepository = cre
     }
   }, "Template initialization");
 
+  if (repository.private) {
+    const security = repository.security_and_analysis;
+    if (!security?.code_security && !security?.advanced_security) {
+      throw new Error("Repository security settings are unavailable. Admin or security-manager access is required to enable code scanning.");
+    }
+    const product = security.code_security ? "code_security" : "advanced_security";
+    if (security[product].status !== "enabled") {
+      await checkpoint("Enabling repository code security");
+      await api("PATCH", prefix, { security_and_analysis: { [product]: { status: "enabled" } } });
+      await checkpoint("Waiting for repository code security");
+      await waitFor(async () => {
+        const current = await api("GET", prefix);
+        assertOwnedRepository(environment, current);
+        if (!current.security_and_analysis?.[product]) {
+          throw new Error("Repository code security readback is unavailable. CodeQL setup has not started.");
+        }
+        return current.security_and_analysis[product].status === "enabled";
+      }, "Repository code security");
+    }
+  }
+
   await checkpoint("Configuring CodeQL default setup");
   const setup = await api("GET", `${prefix}/code-scanning/default-setup`);
   if (!environment.setupRunPath && (setup.state !== "configured" || environment.setupFailed)) {
