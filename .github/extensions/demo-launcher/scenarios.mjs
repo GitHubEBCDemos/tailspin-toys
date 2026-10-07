@@ -66,7 +66,7 @@ export function assertScenarioPull(environment, kind, pull) {
 
 export async function scenarioPull(environment, kind, api) {
   const number = environment.scenarios?.[kind]?.number;
-  if (!number) throw new Error("Resume setup to prepare this demo's PR.");
+  if (!number) throw new Error("This demo's PR was not fully provisioned. Check its creation result.");
   assertOwnedRepository(environment, await api("GET", `repos/${environment.repo}`));
   const pull = await api("GET", `repos/${environment.repo}/pulls/${number}`);
   assertScenarioPull(environment, kind, pull);
@@ -76,7 +76,7 @@ export async function scenarioPull(environment, kind, api) {
 
 export async function scenarioIssue(environment, api) {
   const number = environment.scenarios?.issue?.number;
-  if (!number) throw new Error("Resume setup to prepare the pagination issue.");
+  if (!number) throw new Error("The pagination issue was not fully provisioned. Check its creation result.");
   assertOwnedRepository(environment, await api("GET", `repos/${environment.repo}`));
   const issue = await api("GET", `repos/${environment.repo}/issues/${number}`);
   if (issue.pull_request || !issue.body?.includes(scenarioMarker(environment, "issue"))) {
@@ -94,7 +94,7 @@ export async function provisionScenarios(environment, { api, save }) {
   await save();
   if (!environment.scenarios.issue) {
     const marker = scenarioMarker(environment, "issue");
-    const issues = await listAll(api, `${prefix}/issues?state=all&creator=${environment.owner}`);
+    const issues = await listAll(api, `${prefix}/issues?state=all`);
     let issue = issues.find((item) => !item.pull_request && item.body?.includes(marker));
     if (!issue) {
       issue = await api("POST", `${prefix}/issues`, {

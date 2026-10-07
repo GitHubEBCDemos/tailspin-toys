@@ -1,7 +1,10 @@
 import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 
-export const TEMPLATE = "github-samples/tailspin-toys";
+export const DEMO_OWNER = "GitHubEBCDemos";
+export const TEMPLATE = `${DEMO_OWNER}/tailspin-toys`;
+export const UPSTREAM_REPOSITORY = "github-samples/tailspin-toys";
+export const SOURCE_REPOSITORIES = [TEMPLATE, UPSTREAM_REPOSITORY];
 export const BRANCH = "demo/copilot-autofix";
 export const FIXTURE_PATH = "demo-security/preview.mjs";
 export const RULE = "js/reflected-xss";
@@ -60,9 +63,13 @@ export async function optional(api, path) {
   }
 }
 
+export function isSourceRepository(repo) {
+  return SOURCE_REPOSITORIES.some((source) => source.toLowerCase() === repo.toLowerCase());
+}
+
 export function assertOwnedRepository(environment, repository) {
   if (repository.full_name.toLowerCase() !== environment.repo.toLowerCase() ||
-      repository.full_name.toLowerCase() === TEMPLATE.toLowerCase() ||
+      isSourceRepository(repository.full_name) ||
       repository.description !== `Disposable Copilot demo [${environment.id}]` ||
       repository.private || repository.fork ||
       (environment.repositoryId && repository.id !== environment.repositoryId)) {
@@ -109,7 +116,7 @@ export async function provision(environment, { api, save, sleep = (ms) => new Pr
       if (value) return value;
       await sleep(5_000);
     }
-    throw new Error(`${description} is not ready yet. Resume setup later; the existing repository will be reused.`);
+    throw new Error(`${description} is not ready yet. This creation attempt did not finish.`);
   };
   await checkpoint("Checking repository identity");
   const prefix = `repos/${environment.repo}`;
@@ -139,11 +146,20 @@ export async function provision(environment, { api, save, sleep = (ms) => new Pr
   }, "Template initialization");
 
   await checkpoint("Configuring CodeQL default setup");
-  let setup = await api("GET", `${prefix}/code-scanning/default-setup`);
+  const setup = await api("GET", `${prefix}/code-scanning/default-setup`);
   if (!environment.setupRunPath && (setup.state !== "configured" || environment.setupFailed)) {
-    const update = await api("PATCH", `${prefix}/code-scanning/default-setup`, {
-      state: "configured", languages: ["javascript-typescript"], query_suite: "default",
-    });
+    // Template refs can be ready before GitHub finishes indexing their languages.
+    const { update } = await waitFor(async () => {
+      try {
+        return { update: await api("PATCH", `${prefix}/code-scanning/default-setup`, {
+          state: "configured", languages: ["javascript-typescript"], query_suite: "default",
+        }) };
+      } catch (error) {
+        if (error.status !== 422 || !error.message.includes("One or more languages you selected are not present")) throw error;
+        await checkpoint("Waiting for GitHub language detection before configuring CodeQL");
+        return null;
+      }
+    }, "GitHub language detection");
     if (update?.run_url) {
       const url = new URL(update.run_url);
       if (url.origin !== "https://api.github.com" || !url.pathname.startsWith(`/${prefix}/`)) {
@@ -157,26 +173,25 @@ export async function provision(environment, { api, save, sleep = (ms) => new Pr
   if (environment.setupRunPath) {
     await checkpoint("Waiting for CodeQL setup validation");
     await waitFor(async () => {
-      const run = await api("GET", environment.setupRunPath);
-      if (run.status !== "completed") return null;
+      // GitHub can return the setup-run URL before Actions makes that run readable.
+      const run = await optional(api, environment.setupRunPath);
+      if (!run || run.status !== "completed") return null;
       if (run.conclusion !== "success") {
         environment.setupRunPath = null;
         environment.setupFailed = true;
         await save();
-        throw new Error(`CodeQL setup validation ended with ${run.conclusion}. Inspect Actions and permissions, then resume setup.`);
+        throw new Error(`CodeQL setup validation ended with ${run.conclusion}. Inspect this repository's Actions and permissions.`);
       }
       return run;
     }, "CodeQL setup validation");
     environment.setupRunPath = null;
     await save();
   }
-  setup = await waitFor(async () => {
+  await checkpoint("Waiting for CodeQL JavaScript/TypeScript configuration");
+  await waitFor(async () => {
     const result = await api("GET", `${prefix}/code-scanning/default-setup`);
-    return result.state === "configured" ? result : null;
-  }, "CodeQL default setup");
-  if (!setup.languages?.includes("javascript-typescript")) {
-    throw new Error("CodeQL is configured without JavaScript/TypeScript. Enable that language in the demo repository's code scanning settings and resume.");
-  }
+    return result.state === "configured" && result.languages?.includes("javascript-typescript") ? result : null;
+  }, "CodeQL JavaScript/TypeScript default setup");
 
   await checkpoint("Seeding isolated security branch");
   const branchPath = `${prefix}/git/ref/heads/${BRANCH}`;

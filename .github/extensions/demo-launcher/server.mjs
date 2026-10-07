@@ -61,8 +61,8 @@ export async function startServer(controller) {
         return;
       }
       const methods = new Map([
-        ["create", "create"], ["resume", "resume"], ["retry-session", "retrySession"],
-        ["feature", "feature"], ["refresh", "refresh"], ["select", "select"],
+        ["create", "create"], ["cleanup", "cleanup"],
+        ["feature", "feature"], ["refresh", "refresh"],
         ["scenario", "scenario"], ["scenario-status", "refreshScenario"],
       ]);
       if (request.method !== "POST" || !methods.has(route)) {

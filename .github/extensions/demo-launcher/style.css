@@ -54,6 +54,9 @@ button:hover:not(:disabled), .button:hover { background: var(--cp-accent-hover);
 .secondary { background: var(--cp-surface); color: var(--cp-text); border-color: var(--cp-border-strong); }
 .secondary:hover:not(:disabled) { background: var(--cp-surface-soft); }
 button:disabled { opacity: 0.5; cursor: not-allowed; }
+.spinner { display: inline-block; width: 1em; height: 1em; margin-right: 8px; vertical-align: -0.125em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .spinner { animation: none; } }
 :is(button, select, a, summary):focus-visible { outline: 3px solid var(--cp-focus); outline-offset: 3px; }
 .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 details { margin-top: 16px; }

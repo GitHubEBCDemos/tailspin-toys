@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import { Controller, FEATURE_PROMPT, Store } from "./controller.mjs";
-import { BRANCH, FIXTURE, FIXTURE_PATH, GitHubError, RULE, TEMPLATE, provision, pullRequestBody } from "./github.mjs";
+import { BRANCH, DEMO_OWNER, FIXTURE, FIXTURE_PATH, GitHubError, RULE, TEMPLATE, provision, pullRequestBody } from "./github.mjs";
 import { startServer } from "./server.mjs";
 import { harness } from "./test-support.mjs";
 
@@ -11,22 +11,23 @@ test("creates unique repository names with no name or approval input", async (t)
   await h.create();
   await h.link();
   await h.create();
-  const { environments } = await h.controller.state();
+  const { environments } = await h.store.read();
   assert.equal(environments.length, 2);
   assert.notEqual(environments[0].name, environments[1].name);
   for (const environment of environments) {
     assert.match(environment.name, /^tailspin-demo-\d{4}-\d{2}-\d{2}-[a-f0-9]{8}$/);
-    assert.equal(environment.repo, `presenter/${environment.name}`);
+    assert.equal(environment.repo, `${DEMO_OWNER}/${environment.name}`);
+    assert.equal(environment.createdBy, "presenter");
   }
 });
 
-test("creates isolated public environment, configures CodeQL before PR, never writes main", async (t) => {
+test("creates isolated public environment, configures CodeQL before PR, and merges only canvas setup", async (t) => {
   const h = await harness(t);
   h.remote.initializationDelays = 2;
-  await h.create();
+  const created = await h.create();
   const environment = await h.current();
   assert.equal(environment.githubReady, true);
-  assert.equal(environment.repo, `presenter/${environment.name}`);
+  assert.equal(environment.repo, `${DEMO_OWNER}/${environment.name}`);
   assert.equal(environment.prNumber, 1);
   assert.equal(environment.sessionId, undefined);
   assert.equal(h.remote.repository.private, false);
@@ -37,12 +38,16 @@ test("creates isolated public environment, configures CodeQL before PR, never wr
   assert.equal(writes.filter((call) => call.path.endsWith("/issues")).length, 1);
   assert.ok(writes.every((call) => !call.body?.branch || call.body.branch.startsWith("demo/")));
   assert.equal(writes[0].path, `repos/${TEMPLATE}/generate`);
+  assert.equal(writes[0].body.owner, DEMO_OWNER);
   assert.equal(writes[2].body.ref, `refs/heads/${BRANCH}`);
   assert.equal(writes[3].body.branch, BRANCH);
   assert.ok(writes[4].body.body.includes("never merge or deploy"));
-  assert.equal(h.messages.length, 1);
-  assert.match(h.messages[0].prompt, /create_project[\s\S]*create_session/);
-  assert.ok(h.messages[0].prompt.includes(environment.repo));
+  assert.equal(h.messages.length, 0);
+  assert.equal(environment.launcherReady, true);
+  assert.equal(environment.launcherMergeCommit, h.remote.mainSha);
+  assert.equal(writes.filter(({ path }) => path.endsWith("/merges")).length, 1);
+  assert.match(created.environments[0].launchUrl, /^https:\/\/github.com\/copilot\/app\/launch/);
+  assert.deepEqual((await h.source.state()).environments, []);
   assert.doesNotMatch(FIXTURE, /\.listen\s*\(/);
   assert.match(FIXTURE, /searchParams\.get/);
 });
@@ -50,7 +55,7 @@ test("creates isolated public environment, configures CodeQL before PR, never wr
 test("refuses to adopt another repo and preserves a recoverable receipt", async (t) => {
   const h = await harness(t);
   h.controller.api = async (method, path, body) => {
-    if (method === "GET" && /^repos\/presenter\/tailspin-demo-[^/]+$/.test(path)) {
+    if (method === "GET" && new RegExp(`^repos/${DEMO_OWNER}/tailspin-demo-[^/]+$`).test(path)) {
       return { full_name: path.slice("repos/".length), id: 999, description: "Someone else's project" };
     }
     return h.api(method, path, body);
@@ -61,7 +66,7 @@ test("refuses to adopt another repo and preserves a recoverable receipt", async 
   assert.equal(h.messages.length, 0);
 });
 
-test("resumes a lost create response using the UUID marker without creating a duplicate repo", async (t) => {
+test("Create starts a new repository after a lost response and retains the failed attempt's receipt", async (t) => {
   const h = await harness(t);
   const api = h.controller.api;
   h.controller.api = async (method, path, body) => {
@@ -73,26 +78,70 @@ test("resumes a lost create response using the UUID marker without creating a du
     return result;
   };
   await assert.rejects(h.create(), /Connection lost/);
-  await h.controller.resume();
+  const failed = await h.current();
+  await h.create();
   assert.equal((await h.current()).githubReady, true);
-  assert.equal(h.calls.filter((call) => call.path.endsWith("/generate")).length, 1);
+  assert.notEqual((await h.current()).repo, failed.repo);
+  assert.match((await h.store.read()).environments[0].error, /Connection lost/);
+  assert.equal(h.calls.filter((call) => call.path.endsWith("/generate")).length, 2);
 });
 
-test("partial CodeQL permission failure remains visible and retry does not duplicate resources", async (t) => {
+test("failed CodeQL setup does not become the next Create target", async (t) => {
   const h = await harness(t);
   h.remote.failure = (method, path) => method === "PATCH" && path.endsWith("default-setup") ? new GitHubError("Forbidden: enable code scanning", 403) : null;
   await assert.rejects(h.create(), /Forbidden/);
   assert.equal(h.remote.pulls.length, 0);
   assert.match((await h.current()).error, /Forbidden/);
   h.remote.failure = null;
-  await h.controller.resume();
-  await h.controller.resume();
+  await h.create();
   assert.equal(h.remote.pulls.length, 3);
-  assert.equal(h.calls.filter((call) => call.path.endsWith("/generate")).length, 1);
-  assert.equal(h.messages.length, 1);
+  assert.equal(h.calls.filter((call) => call.path.endsWith("/generate")).length, 2);
+  assert.equal((await h.store.read()).environments.length, 2);
+  assert.equal(h.messages.length, 0);
 });
 
-test("lost PR response is recovered and changed fixtures or closed PRs are not overwritten", async (t) => {
+test("Create stays in the organization when the signed-in account changes", async (t) => {
+  const h = await harness(t);
+  h.remote.failure = (method) => method === "PATCH" ? new GitHubError("Forbidden", 403) : null;
+  await assert.rejects(h.create(), /Forbidden/);
+  const failed = await h.current();
+  h.remote.failure = null;
+  h.source.api = (method, path, body) => path === "user" ? { login: "another-presenter" } : h.api(method, path, body);
+  await h.create();
+  assert.equal((await h.current()).owner, DEMO_OWNER);
+  assert.equal((await h.current()).createdBy, "another-presenter");
+  assert.deepEqual((await h.store.read()).environments[0], failed);
+  assert.equal((await h.store.read()).environments.length, 2);
+});
+
+test("organization creation failure never falls back to a personal repository", async (t) => {
+  const h = await harness(t);
+  h.remote.failure = (method, path) => method === "POST" && path.endsWith("/generate")
+    ? new GitHubError("Organization repository creation is forbidden", 403) : null;
+  await assert.rejects(h.create(), /Organization repository creation is forbidden/);
+  const creations = h.calls.filter(({ path }) => path.endsWith("/generate"));
+  assert.equal(creations.length, 1);
+  assert.equal(creations[0].body.owner, DEMO_OWNER);
+  assert.equal((await h.current()).owner, DEMO_OWNER);
+  assert.equal((await h.current()).launcherReady, undefined);
+});
+
+test("Create ignores legacy pending setup and never changes that old receipt", async (t) => {
+  const h = await harness(t);
+  await h.create();
+  const state = await h.store.read();
+  delete state.environments[0].sourceSessionId;
+  state.environments[0].request = { kind: "session", status: "pending" };
+  await h.store.write(state);
+  await h.create();
+  assert.deepEqual((await h.store.read()).environments[0], state.environments[0]);
+  assert.equal((await h.current()).sourceSessionId, "source-session");
+  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 2);
+  await h.create();
+  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 3);
+});
+
+test("Create starts fresh after a lost PR response; changed fixtures and closed PRs remain protected", async (t) => {
   const h = await harness(t);
   const api = h.controller.api;
   h.controller.api = async (method, path, body) => {
@@ -104,7 +153,7 @@ test("lost PR response is recovered and changed fixtures or closed PRs are not o
     return result;
   };
   await assert.rejects(h.create(), /Lost PR response/);
-  await h.controller.resume();
+  await h.create();
   assert.equal(h.remote.pulls.length, 3);
   const environment = await h.current();
   h.remote.fixture = Buffer.from("edited").toString("base64");
@@ -123,12 +172,137 @@ test("CodeQL setup validation must succeed before creating a security branch or 
   const environment = await h.current();
   assert.equal(environment.setupRunPath, `repos/${environment.repo}/actions/runs/42`);
   h.remote.setupRun = { status: "completed", conclusion: "failure" };
-  await assert.rejects(h.controller.resume(), /validation ended with failure/);
+  await assert.rejects(h.create(), /validation ended with failure/);
   assert.equal((await h.current()).setupFailed, true);
   h.remote.setupRun = { status: "completed", conclusion: "success" };
-  await h.controller.resume();
+  await h.create();
   assert.equal(h.remote.pulls.length, 3);
-  assert.equal(h.calls.filter((call) => call.method === "PATCH").length, 2);
+  assert.equal(h.calls.filter((call) => call.method === "PATCH").length, 3);
+});
+
+test("CodeQL setup retries a newly created run's 404 and waits for successful validation", async (t) => {
+  const h = await harness(t);
+  h.remote.setupRun = { status: "in_progress", conclusion: null };
+  let missingReads = 2;
+  h.remote.failure = (method, path) => method === "GET" && path.endsWith("/actions/runs/42") && missingReads-- > 0
+    ? new GitHubError("Not Found", 404) : null;
+  let waits = 0;
+  h.source.sleep = async (ms) => {
+    assert.equal(ms, 5_000);
+    assert.equal(h.remote.branch, null);
+    assert.equal(h.remote.pulls.length, 0);
+    const environment = (await h.source.state()).environments[0];
+    assert.equal(environment.githubReady, false);
+    assert.equal(environment.launchUrl, null);
+    if (++waits === 3) h.remote.setupRun = { status: "completed", conclusion: "success" };
+  };
+  const created = await h.create();
+  assert.equal(waits, 3);
+  assert.equal(h.calls.filter(({ path }) => path.endsWith("/actions/runs/42")).length, 4);
+  assert.equal(h.calls.filter(({ method }) => method === "PATCH").length, 1);
+  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 1);
+  assert.equal((await h.store.read()).environments.length, 1);
+  assert.equal((await h.current()).setupRunPath, null);
+  assert.equal((await h.current()).launcherReady, true);
+  assert.ok(created.environments[0].launchUrl);
+});
+
+test("a persistently missing CodeQL setup run times out without seeding or launching", async (t) => {
+  const h = await harness(t);
+  h.remote.setupRun = { status: "completed", conclusion: "success" };
+  h.remote.failure = (method, path) => method === "GET" && path.endsWith("/actions/runs/42")
+    ? new GitHubError("Not Found", 404) : null;
+  let waits = 0;
+  h.source.sleep = async (ms) => { assert.equal(ms, 5_000); waits += 1; };
+  await assert.rejects(h.create(), /CodeQL setup validation is not ready yet/);
+  assert.equal(waits, 24);
+  assert.equal(h.calls.filter(({ path }) => path.endsWith("/actions/runs/42")).length, 24);
+  assert.equal(h.calls.filter(({ method }) => method === "PATCH").length, 1);
+  assert.equal(h.remote.branch, null);
+  assert.equal(h.remote.pulls.length, 0);
+  const environment = await h.current();
+  assert.equal(environment.setupRunPath, `repos/${environment.repo}/actions/runs/42`);
+  assert.equal(environment.githubReady, false);
+  assert.equal(environment.launcherReady, undefined);
+  assert.match(environment.error, /CodeQL setup validation is not ready yet/);
+  assert.deepEqual((await h.source.state()).environments, []);
+});
+
+for (const status of [401, 403, 429, 500]) {
+  test(`CodeQL setup run HTTP ${status} is not treated as a publication delay`, async (t) => {
+    const h = await harness(t);
+    h.remote.setupRun = { status: "completed", conclusion: "success" };
+    h.remote.failure = (method, path) => method === "GET" && path.endsWith("/actions/runs/42")
+      ? new GitHubError(`Setup run HTTP ${status}`, status) : null;
+    h.source.sleep = async () => { assert.fail("Unexpected retry"); };
+    await assert.rejects(h.create(), new RegExp(`Setup run HTTP ${status}`));
+    assert.equal(h.calls.filter(({ path }) => path.endsWith("/actions/runs/42")).length, 1);
+    assert.equal(h.remote.branch, null);
+    assert.equal(h.remote.pulls.length, 0);
+    assert.equal((await h.current()).launcherReady, undefined);
+  });
+}
+
+test("CodeQL configuration lookup 404 is not treated as a setup-run publication delay", async (t) => {
+  const h = await harness(t);
+  h.remote.failure = (method, path) => method === "GET" && path.endsWith("/code-scanning/default-setup")
+    ? new GitHubError("Code scanning unavailable", 404) : null;
+  h.source.sleep = async () => { assert.fail("Unexpected retry"); };
+  await assert.rejects(h.create(), /Code scanning unavailable/);
+  assert.equal(h.calls.filter(({ path }) => path.endsWith("/code-scanning/default-setup")).length, 1);
+  assert.equal(h.remote.branch, null);
+});
+
+for (const delays of [2, 24]) {
+  test(`CodeQL language readback ${delays === 2 ? "waits for the validated configuration" : "times out without seeding"}`, async (t) => {
+    const h = await harness(t);
+    h.remote.setupRun = { status: "completed", conclusion: "success" };
+    let remaining = delays;
+    h.source.api = async (method, path, body) => {
+      const result = await h.api(method, path, body);
+      if (method === "GET" && path.endsWith("/code-scanning/default-setup") && result.state === "configured" && remaining-- > 0) {
+        return { ...result, languages: [] };
+      }
+      return result;
+    };
+    let waits = 0;
+    h.source.sleep = async (ms) => {
+      assert.equal(ms, 5_000);
+      assert.equal(h.remote.branch, null);
+      assert.equal(h.remote.pulls.length, 0);
+      waits += 1;
+    };
+    if (delays === 24) {
+      await assert.rejects(h.create(), /CodeQL JavaScript\/TypeScript default setup is not ready yet/);
+      assert.equal((await h.current()).launcherReady, undefined);
+    } else {
+      await h.create();
+      assert.equal((await h.current()).launcherReady, true);
+    }
+    assert.equal(waits, delays);
+    assert.equal(h.calls.filter(({ method }) => method === "PATCH").length, 1);
+    assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 1);
+  });
+}
+
+test("CodeQL waits for template language indexing and records a failed attempt on timeout", async (t) => {
+  const h = await harness(t);
+  h.remote.languageDelays = 24;
+  await assert.rejects(h.create(), /GitHub language detection is not ready/);
+  assert.equal(h.remote.pulls.length, 0);
+  assert.match((await h.current()).step, /Waiting for GitHub language detection/);
+  h.remote.languageDelays = 2;
+  await h.create();
+  assert.equal((await h.current()).launcherReady, true);
+  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 2);
+  assert.equal(h.calls.filter(({ method }) => method === "PATCH").length, 27);
+});
+
+test("unrelated CodeQL validation errors are not retried as language-indexing delays", async (t) => {
+  const h = await harness(t);
+  h.remote.failure = (method) => method === "PATCH" ? new GitHubError("Invalid runner configuration", 422) : null;
+  await assert.rejects(h.create(), /Invalid runner configuration/);
+  assert.equal(h.calls.filter(({ method }) => method === "PATCH").length, 1);
 });
 
 test("seeded PR preserves template headings, comments and checklist items", async () => {
@@ -139,44 +313,45 @@ test("seeded PR preserves template headings, comments and checklist items", asyn
   assert.match(body, /not run by environment provisioning/);
 });
 
-test("handoffs route to the recorded session, not this checkout; duplicate pending clicks rejected", async (t) => {
+test("feature work runs in the bound demo session, never the core session or a self-message", async (t) => {
   const h = await harness(t);
   await h.create();
-  await assert.rejects(h.controller.feature(), /linked/);
+  await assert.rejects(h.controller.feature(), /Open the new repository/);
   await h.link();
   await h.controller.feature();
-  assert.match(h.messages[1].prompt, /session_id="demo-session"/);
-  assert.match(h.messages[1].prompt, /project "demo-project"/);
-  assert.ok(h.messages[1].prompt.includes(FEATURE_PROMPT));
-  assert.match(h.messages[1].prompt, /Never implement the feature in the launcher/);
+  assert.match(h.messages[0].prompt, /get_session on "demo-session"/);
+  assert.match(h.messages[0].prompt, /project "demo-project"/);
+  assert.ok(h.messages[0].prompt.includes(FEATURE_PROMPT));
+  assert.match(h.messages[0].prompt, /directly in this verified demo session/);
+  assert.doesNotMatch(h.messages[0].prompt, /send_session_message with/);
   await assert.rejects(h.controller.feature(), /pending/);
-  assert.equal(h.messages.length, 2);
+  assert.equal(h.messages.length, 1);
 });
 
-test("session recovery rejects stale receipts and validates IDs", async (t) => {
+test("session binding checks repo and IDs; receipts reject stale requests", async (t) => {
   const h = await harness(t);
   await h.create();
-  const old = await h.current();
-  await h.controller.retrySession({ confirmRetry: true });
+  await h.link();
   await assert.rejects(h.controller.receipt({
-    environmentId: old.id, requestId: old.request.id, kind: "session", status: "done",
-    projectId: "demo-project", sessionId: "demo-session",
+    environmentId: (await h.current()).id, requestId: "old-request", kind: "feature", status: "done",
   }), /Stale/);
   const environment = await h.current();
-  await assert.rejects(h.controller.receipt({
-    environmentId: environment.id, requestId: environment.request.id, kind: "session", status: "done",
-    projectId: "demo-project", sessionId: 'bad"session',
-  }), /verified app/);
-  await h.link();
-  assert.equal((await h.current()).sessionId, "demo-session");
+  await assert.rejects(h.controller.bindSession({
+    repo: environment.repo, projectId: "demo-project", sessionId: 'bad"session', sessionName: "Bad",
+  }), /Verified app/);
+  await assert.rejects(h.controller.bindSession({
+    repo: TEMPLATE, projectId: "demo-project", sessionId: "demo-session", sessionName: "Bad",
+  }), /repository does not match/);
+  assert.equal((await h.current()).sessions[0].id, "demo-session");
 });
 
 test("receipts survive new controllers and malformed files are not silently reset", async (t) => {
   const h = await harness(t);
   await h.create();
-  const reloaded = new Controller({ store: new Store(h.store.directory), api: h.api, send: async () => assert.fail("Must not resend on reload") });
+  const reloaded = new Controller({ store: new Store(h.store.directory), api: h.api, repo: TEMPLATE, sessionId: () => "source-session", send: async () => assert.fail("Must not resend on reload") });
   assert.deepEqual(await reloaded.state(), await h.controller.state());
-  await reloaded.resume();
+  assert.equal((await reloaded.store.read()).environments.length, 1);
+  assert.deepEqual((await reloaded.state()).environments, []);
   await writeFile(h.store.path, "{broken");
   await assert.rejects(reloaded.state(), SyntaxError);
 });
@@ -184,12 +359,14 @@ test("receipts survive new controllers and malformed files are not silently rese
 test("failed app receipt never claims successful delivery", async (t) => {
   const h = await harness(t);
   await h.create();
+  await h.link();
+  await h.controller.feature();
   const environment = await h.current();
   await h.controller.receipt({
-    environmentId: environment.id, requestId: environment.request.id, kind: "session", status: "failed",
+    environmentId: environment.id, requestId: environment.request.id, kind: "feature", status: "failed",
   });
   assert.match((await h.current()).error, /could not complete/);
-  assert.equal((await h.current()).sessionId, undefined);
+  assert.equal((await h.current()).request.status, "failed");
 });
 
 test("concurrent operations are rejected and a dead-process lock can be recovered", async (t) => {
@@ -206,6 +383,7 @@ test("concurrent operations are rejected and a dead-process lock can be recovere
 test("readiness distinguishes pending, failed, missing, stale, alert and confirmed PR suggestion", async (t) => {
   const h = await harness(t);
   await h.create();
+  await h.link();
   const refresh = async () => {
     await h.controller.refresh();
     return (await h.current()).scan.state;
@@ -235,6 +413,7 @@ test("readiness distinguishes pending, failed, missing, stale, alert and confirm
 test("readiness permission errors never appear as pending or ready", async (t) => {
   const h = await harness(t);
   await h.create();
+  await h.link();
   h.remote.failure = (_method, path) => path.includes("/code-scanning/alerts?") ? new GitHubError("Forbidden to read alerts", 403) : null;
   await assert.rejects(h.controller.refresh(), /Forbidden/);
   assert.equal((await h.current()).scan.state, "unavailable");
@@ -263,5 +442,7 @@ test("loopback serves assets and state, rejects foreign origins and unauthentica
   assert.equal((await response.json()).environments[0].prNumber, 1);
   const second = await startServer(h.controller);
   t.after(second.close);
-  assert.equal((await (await fetch(`${second.url}state`)).json()).environments[0].prNumber, 1);
+  const idle = await (await fetch(`${second.url}state`)).json();
+  assert.equal(idle.activeId, null);
+  assert.deepEqual(idle.environments, []);
 });

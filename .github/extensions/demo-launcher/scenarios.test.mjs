@@ -12,7 +12,10 @@ import { CI_BRANCH, CI_PATH, CI_SOURCE, CI_TEST, CI_TEST_PATH, REVIEW_BRANCH, RE
 
 async function finishHandoff(h, kind) {
   const environment = await h.current();
-  await h.controller.receipt({ environmentId: environment.id, requestId: environment.request.id, kind, status: "done" });
+  await h.controller.receipt({
+    environmentId: environment.id, requestId: environment.request.id, kind, status: "done",
+    projectId: "demo-project", sessionId: `${kind}-session`, sessionName: `${kind} demo`,
+  });
 }
 
 test("all scenarios are isolated, recoverable, and do not request reviews or agent work during provisioning", async (t) => {
@@ -23,7 +26,7 @@ test("all scenarios are isolated, recoverable, and do not request reviews or age
   assert.equal(h.remote.issues.length, 1);
   assert.equal(h.remote.pulls.length, 3);
   assert.equal(h.remote.reviewRequests.length, 0);
-  assert.equal(h.messages.length, 1);
+  assert.equal(h.messages.length, 0);
   for (const branch of [REVIEW_BRANCH, CI_BRANCH]) assert.equal(h.remote.branches.get(branch).object.sha, "base-sha");
   assert.equal(Buffer.from(h.remote.files.get(`${REVIEW_BRANCH}:${REVIEW_PATH}`), "base64").toString(), REVIEW_SOURCE);
   assert.equal(Buffer.from(h.remote.files.get(`${CI_BRANCH}:${CI_PATH}`), "base64").toString(), CI_SOURCE);
@@ -34,7 +37,7 @@ test("all scenarios are isolated, recoverable, and do not request reviews or age
 });
 
 for (const resource of ["issue", "review", "ci"]) {
-  test(`lost ${resource} creation response is recovered without duplicating the resource`, async (t) => {
+  test(`a lost ${resource} response is recorded without attaching the next Create to that attempt`, async (t) => {
     const h = await harness(t);
     const api = h.controller.api;
     h.controller.api = async (method, path, body) => {
@@ -46,14 +49,17 @@ for (const resource of ["issue", "review", "ci"]) {
       return result;
     };
     await assert.rejects(h.create(), /Lost creation response/);
-    await h.controller.resume();
+    const failed = await h.current();
+    await h.create();
     assert.equal(h.remote.issues.length, 1);
     assert.equal(h.remote.pulls.length, 3);
     assert.equal((await h.current()).scenariosReady, true);
+    assert.notEqual((await h.current()).id, failed.id);
+    assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 2);
   });
 }
 
-test("resuming an older environment adds scenarios without recreating the security PR or resetting edited fixtures", async (t) => {
+test("scenario provisioning preserves existing security PRs and edited fixtures", async (t) => {
   const h = await harness(t);
   await h.create();
   await h.link();
@@ -64,10 +70,10 @@ test("resuming an older environment adds scenarios without recreating the securi
   h.remote.fixture = Buffer.from("security fix already applied").toString("base64");
   h.remote.files.set(`${REVIEW_BRANCH}:${REVIEW_PATH}`, Buffer.from("review fix already applied").toString("base64"));
   const writes = h.calls.filter(({ method }) => method !== "GET").length;
-  await h.controller.resume();
+  await provisionScenarios(state.environments[0], { api: h.api, save: () => h.store.write(state) });
   assert.equal(h.calls.filter(({ method }) => method !== "GET").length, writes);
   assert.equal(h.remote.pulls.length, 3);
-  assert.equal(h.messages.length, 1);
+  assert.equal(h.messages.length, 0);
 });
 
 test("issue-to-PR routes to an isolated issue session with explicit PR authorization", async (t) => {
@@ -76,7 +82,7 @@ test("issue-to-PR routes to an isolated issue session with explicit PR authoriza
   await h.link();
   await h.controller.scenario({ kind: "issue" });
   const environment = await h.current();
-  const prompt = h.messages[1].prompt;
+  const prompt = h.messages[0].prompt;
   assert.ok(prompt.includes(`issue_number=${environment.scenarios.issue.number}`));
   assert.match(prompt, /open_issue_session/);
   assert.match(prompt, /create_pull_request/);
@@ -87,7 +93,7 @@ test("issue-to-PR routes to an isolated issue session with explicit PR authoriza
   assert.equal((await h.current()).request.status, "done");
   h.remote.issues[0].state = "closed";
   await assert.rejects(h.controller.scenario({ kind: "issue" }), /issue is closed/);
-  assert.equal(h.messages.length, 2);
+  assert.equal(h.messages.length, 1);
 });
 
 test("code review requests are scoped, deduplicated, and report completion only for the current PR commit", async (t) => {
@@ -99,7 +105,7 @@ test("code review requests are scoped, deduplicated, and report completion only 
   const environment = await h.current();
   const pull = h.remote.pulls.find(({ number }) => number === environment.scenarios.review.number);
   assert.deepEqual(h.remote.reviewRequests, [{ repo: environment.repo, number: pull.number }]);
-  assert.equal(h.messages.length, 1);
+  assert.equal(h.messages.length, 0);
   assert.equal((await h.current()).scenarios.review.status.state, "requested");
   h.remote.reviewUsers = [];
   h.remote.reviews = [{ user: { login: "copilot-pull-request-reviewer[bot]", type: "Bot" }, commit_id: "old", submitted_at: "2026-10-06" }];
@@ -137,7 +143,7 @@ test("CI repair requires a fresh failed unit-test step and uses the existing PR 
   await assert.rejects(h.controller.scenario({ kind: "ci" }), /expected unit-test step/);
   h.remote.ciJobs[0].steps = [{ name: "Run unit tests", conclusion: "failure" }];
   await h.controller.scenario({ kind: "ci" });
-  const prompt = h.messages[1].prompt;
+  const prompt = h.messages[0].prompt;
   assert.match(prompt, /open_pr_session/);
   assert.ok(prompt.includes(`pr_number=${pull.number}`));
   assert.ok(prompt.includes(`https://github.com/${environment.repo}/actions/runs/51`));

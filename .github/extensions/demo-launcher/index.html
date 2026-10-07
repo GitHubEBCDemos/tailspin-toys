@@ -12,35 +12,31 @@
       <header>
         <p class="eyebrow">TAILSPIN TOYS / DEMO LAUNCHER</p>
         <h1>Show what Copilot can do.</h1>
-        <p class="muted">One fresh environment. Five demos. No changes to your source repo.</p>
+        <p id="context-summary" class="muted">Checking this session's repository...</p>
       </header>
 
-      <section class="card environment" aria-labelledby="environment-heading">
+      <section id="setup" class="card environment" aria-labelledby="environment-heading" hidden>
         <div class="heading-row">
           <h2 id="environment-heading">Demo environment</h2>
-          <span class="badge" id="environment-badge">Not created</span>
-        </div>
-        <div id="saved-environments" hidden>
-          <label for="environment-picker">Saved environment</label>
-          <select id="environment-picker" data-testid="environment-picker"></select>
+          <span class="badge" id="environment-badge">Ready</span>
         </div>
         <div id="environment-info" hidden>
           <p><a id="repo-link" data-testid="repo-link" target="_blank" rel="noopener noreferrer"></a></p>
-          <p id="setup-status" class="muted"></p>
-          <p id="session-status" class="muted"></p>
+          <p id="setup-status" class="muted" role="status" aria-live="polite"></p>
           <div class="actions">
-            <button id="resume" class="secondary" data-testid="resume-setup" type="button">Resume setup</button>
-            <button id="retry-session" class="secondary" data-testid="retry-session" type="button">Recover app session</button>
+            <a id="open-app" class="button" data-testid="open-app" target="_blank" rel="noopener noreferrer" hidden>Open in Copilot app</a>
           </div>
         </div>
 
-        <p class="hint">Creates an automatically named public repo from the <a href="https://github.com/github-samples/tailspin-toys" data-testid="template-link" target="_blank" rel="noopener noreferrer">Tailspin Toys template</a>, a pagination issue, three demo PRs, and a Copilot app session. Uses your signed-in GitHub account; session setup runs <code>npm ci</code>.</p>
-        <button id="create" data-testid="create-environment" type="button">Create environment</button>
+        <p class="hint">Creates an automatically named public repo in <a href="https://github.com/GitHubEBCDemos" data-testid="demo-org-link" target="_blank" rel="noopener noreferrer">GitHubEBCDemos</a> from the <a href="https://github.com/GitHubEBCDemos/tailspin-toys" data-testid="template-link" target="_blank" rel="noopener noreferrer">Tailspin Toys template</a>, a pagination issue, and three demo PRs. Merges only the canvas setup into the new repo's main branch, then opens a Copilot app session once the canvas files are verified there. The source repos and demo PRs are never merged. Confirm the app's launch prompt; session setup runs <code>npm ci</code>.</p>
+        <button id="create" data-testid="create-environment" type="button" disabled>
+          <span id="create-spinner" class="spinner" aria-hidden="true" hidden></span><span id="create-label">Create</span>
+        </button>
       </section>
 
-      <section aria-labelledby="demos-heading">
+      <p id="instance-status" class="hint" role="status" aria-live="polite" hidden></p>
+      <section id="demos" aria-labelledby="demos-heading" hidden>
         <h2 id="demos-heading" class="section-heading">Your demos</h2>
-        <p id="scenario-availability" class="hint" role="status" hidden></p>
         <ol class="demo-list">
           <li class="card">
             <div class="heading-row"><span class="eyebrow">COPILOT APP</span><span class="badge">Build</span></div>
@@ -51,13 +47,13 @@
               <p id="feature-prompt" class="prompt"></p>
             </details>
             <button id="feature" data-testid="run-feature" type="button" disabled>Run feature demo</button>
-            <p id="feature-status" class="hint">Create an environment to link a demo session.</p>
+            <p id="feature-status" class="hint">Runs in this demo session.</p>
           </li>
           <li class="card">
             <div class="heading-row"><span class="eyebrow">GITHUB ISSUES + COPILOT APP</span><span class="badge">Deliver</span></div>
             <h3>Issue to pull request</h3>
             <p>Turn a scoped pagination issue into an implementation, tests, and a linked PR in a separate worktree.</p>
-            <p id="issue-status" class="hint">Create an environment to prepare the issue.</p>
+            <p id="issue-status" class="hint"></p>
             <div class="actions">
               <button id="run-issue" data-testid="run-issue" data-scenario="issue" type="button" disabled>Run issue demo</button>
               <a id="issue-link" data-testid="issue-link" target="_blank" rel="noopener noreferrer" hidden>Open issue</a>
@@ -67,7 +63,7 @@
             <div class="heading-row"><span class="eyebrow">COPILOT CODE REVIEW</span><span class="badge">Review</span></div>
             <h3>Review a buggy PR</h3>
             <p>Request a Copilot review of a seeded pagination helper, then walk through the feedback on GitHub.</p>
-            <p id="review-status" class="hint">Create an environment to prepare the review PR.</p>
+            <p id="review-status" class="hint"></p>
             <div class="actions">
               <button id="run-review" data-testid="run-review" data-scenario="review" type="button" disabled>Request Copilot review</button>
               <button id="check-review" data-testid="check-review" data-check-scenario="review" class="secondary" type="button" disabled>Check review</button>
@@ -78,7 +74,7 @@
             <div class="heading-row"><span class="eyebrow">GITHUB ACTIONS + COPILOT APP</span><span class="badge">Repair</span></div>
             <h3>Fix failing CI</h3>
             <p>Start with a real unit-test failure. Ask Copilot to inspect the logs, fix the implementation, and push the repair to this demo PR.</p>
-            <p id="ci-status" class="hint">Create an environment, then check CI before starting the repair.</p>
+            <p id="ci-status" class="hint">Check CI before starting the repair.</p>
             <div class="actions">
               <button id="run-ci" data-testid="run-ci" data-scenario="ci" type="button" disabled>Fix failing CI</button>
               <button id="check-ci" data-testid="check-ci" data-check-scenario="ci" class="secondary" type="button" disabled>Check CI</button>
@@ -103,17 +99,25 @@
           </li>
         </ol>
       </section>
+      <section id="cleanup-section" class="card section-heading" aria-labelledby="cleanup-heading" hidden>
+        <h2 id="cleanup-heading">Clean up this demo</h2>
+        <p class="hint">Deletes the disposable GitHub repository and confirmed app sessions from the core session. Removing the local Copilot app project is a final manual step.</p>
+        <button id="cleanup" class="secondary" data-testid="cleanup" type="button" disabled>Clean up environment</button>
+        <p id="cleanup-status" class="hint" role="status" aria-live="polite"></p>
+      </section>
       <p id="status" role="status" aria-live="polite"></p>
       <p id="error" role="alert" hidden></p>
       <footer>Requires GitHub CLI sign-in and repository creation rights. Never merge or deploy the demo security PR. GitHub Actions may consume minutes; environments are not deleted automatically. <a href="https://docs.github.com/en/code-security/concepts/code-scanning/autofix-for-code-scanning" data-testid="autofix-docs" target="_blank" rel="noopener noreferrer">Copilot Autofix availability</a> depends on GitHub processing and account policy; a generated fix is not guaranteed.</footer>
     </main>
-    <dialog id="recovery-dialog" aria-labelledby="recovery-heading">
-      <h2 id="recovery-heading">Recover the app handoff</h2>
-      <p>First check this conversation for an active request or permission prompt. Recovery asks Copilot to find and reuse the existing demo project and session, creating them only if missing.</p>
-      <p>Only continue if the previous request is no longer running. This cannot cancel a message already being processed.</p>
+    <dialog id="cleanup-dialog" aria-labelledby="cleanup-dialog-heading">
+      <h2 id="cleanup-dialog-heading">Delete this demo environment?</h2>
+      <p>This deletes <strong id="cleanup-repo"></strong> on GitHub and removes these app sessions, including their uncommitted work:</p>
+      <ul id="cleanup-sessions"></ul>
+      <p>The core repository is never deleted. You will return to its session for cleanup, then remove the local demo project manually in the app.</p>
+      <p id="cleanup-retry-warning" hidden>Only retry after checking that the previous cleanup request is no longer running.</p>
       <form method="dialog" class="actions">
-        <button value="cancel" class="secondary" data-testid="cancel-recovery">Cancel</button>
-        <button value="recover" data-testid="confirm-recovery">I checked; recover session</button>
+        <button value="cancel" class="secondary" data-testid="cancel-cleanup">Cancel</button>
+        <button value="delete" data-testid="confirm-cleanup">Delete demo environment</button>
       </form>
     </dialog>
   </body>
