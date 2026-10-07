@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { access } from "node:fs/promises";
 import { repositoryFromRemote } from "./workspace.mjs";
 import { RUNTIME_FILES, launchUrl, verifyLauncher } from "./launch.mjs";
 import { DEMO_OWNER, GitHubError, SOURCE_REPOSITORIES, TEMPLATE, UPSTREAM_REPOSITORY } from "./github.mjs";
@@ -75,7 +75,7 @@ test("the published template canvas is inherited and verified without any runtim
   assert.deepEqual(h.remote.runtimeFiles, h.remote.templateFiles);
   assert.deepEqual(h.remote.runtimeFiles.map(({ path }) => path), RUNTIME_FILES.map((file) => `.github/extensions/demo-launcher/${file}`));
   const url = new URL(created.environments[0].launchUrl);
-  assert.equal(created.interfaceVersion, 5);
+  assert.equal(created.interfaceVersion, 6);
   assert.equal(created.environments[0].setupUrl, undefined);
   assert.equal(url.origin, "https://github.com");
   const target = new URL(url.searchParams.get("open"));
@@ -85,9 +85,9 @@ test("the published template canvas is inherited and verified without any runtim
   assert.equal(target.searchParams.get("repo"), environment.repo);
   assert.equal(target.searchParams.get("branch"), "main");
   const prompt = target.searchParams.get("prompt");
-  assert.ok(prompt.includes(`Expected origin: ${environment.repo}; default branch: main; verified commit: ${environment.launcherVerifiedCommit}.`));
-  assert.match(prompt, /BOOTSTRAP\.md from that commit using git show/);
-  assert.ok(RUNTIME_FILES.includes("BOOTSTRAP.md"));
+  assert.match(prompt, /get_state[\s\S]*get_session[\s\S]*bind_session/);
+  assert.doesNotMatch(prompt, /Expected origin|verified commit|BOOTSTRAP|git show|fetch/);
+  assert.ok(RUNTIME_FILES.includes("startup.mjs"));
   assert.ok(h.calls.some(({ method, path }) => method === "GET" && path === `repos/${TEMPLATE}/contents/.github/extensions/demo-launcher?ref=${h.remote.templateSha}`));
   assert.ok(h.calls.some(({ method, path }) => method === "GET" && path === `repos/${environment.repo}/contents/.github/extensions/demo-launcher?ref=${environment.launcherVerifiedCommit}`));
   assert.equal(environment.launcherTemplateCommit, h.remote.templateSha);
@@ -116,41 +116,39 @@ test("cleanup hides the session launch link", async (t) => {
   assert.equal(state.environments[0].setupUrl, undefined);
 });
 
-test("short kickoff reads the pinned guide without requiring unavailable lifecycle tools", () => {
+test("short kickoff only focuses the canvas and registers the current app session", () => {
   const verifiedCommit = "a".repeat(40);
   const url = new URL(launchUrl({
-    repo: `${DEMO_OWNER}/tailspin-demo-bootstrap`, defaultBranch: "main",
+    repo: `${DEMO_OWNER}/tailspin-demo-startup`, defaultBranch: "main",
     launcherReady: true, launcherVerifiedCommit: verifiedCommit,
   }));
   const target = new URL(url.searchParams.get("open"));
   assert.equal(target.searchParams.get("mode"), "interactive");
   const prompt = target.searchParams.get("prompt");
-  assert.ok(prompt.length <= 750, `Kickoff must stay short; received ${prompt.length} characters.`);
-  assert.match(prompt, /^Open the Copilot demos canvas\./);
-  assert.doesNotMatch(prompt, /extensions_reload|extensions_manage|First tool call/);
-  assert.ok(prompt.includes(`verified commit: ${verifiedCommit}.`));
-  assert.match(prompt, /BOOTSTRAP\.md from that commit using git show \(fetch origin main only if needed\)/);
-  assert.match(prompt, /Do not rewrite extension files or reload a working provider/);
+  assert.ok(prompt.length <= 350, `Kickoff must stay short; received ${prompt.length} characters.`);
+  assert.match(prompt, /^Open or focus the Copilot demos canvas using instance ID demo-session-panel\./);
+  assert.match(prompt, /get_state[\s\S]*get_session[\s\S]*bind_session with the verified repository, project ID, session ID, and name/);
+  assert.match(prompt, /If the canvas is unavailable, report that and stop/);
+  assert.match(prompt, /do not modify extension files or reload extensions/);
+  assert.doesNotMatch(prompt, /extensions_reload|extensions_manage|First tool call|BOOTSTRAP|git show|fetch|Expected origin|verified commit/);
+  assert.equal(prompt.includes(verifiedCommit), false);
+  assert.equal(prompt.includes(target.searchParams.get("repo")), false);
+  const other = new URL(new URL(launchUrl({
+    repo: `${DEMO_OWNER}/another-demo`, defaultBranch: "develop",
+    launcherReady: true, launcherVerifiedCommit: "b".repeat(40),
+  })).searchParams.get("open"));
+  assert.equal(other.searchParams.get("prompt"), prompt);
+  assert.equal(other.searchParams.get("branch"), "develop");
 });
 
 test("legacy verified default-branch receipts still expose a launch link", () => {
   const url = launchUrl({ repo: "presenter/demo", defaultBranch: "main", launcherReady: true, launcherMergeCommit: "old-verified-main" });
-  assert.ok(new URL(new URL(url).searchParams.get("open")).searchParams.get("prompt").includes("verified commit: old-verified-main."));
+  assert.equal(new URL(new URL(url).searchParams.get("open")).searchParams.get("repo"), "presenter/demo");
 });
 
-test("bootstrap uses an available canvas without reload or disk writes and diagnoses trust blockers", async () => {
-  const guide = await readFile(new URL("BOOTSTRAP.md", import.meta.url), "utf8");
-  assert.match(guide, /git show <verified-commit>:\.github\/extensions\/demo-launcher\/BOOTSTRAP\.md/);
-  assert.match(guide, /verify the expected origin before fetching/);
-  assert.match(guide, /Do not restore, rewrite, or overwrite extension files/);
-  assert.match(guide, /Do not switch branches, modify the main checkout, commit, push, install software, create another repository, or run a demo automatically/);
-  assert.match(guide, /If `copilot-demos` is already declared[\s\S]*`list_canvas_capabilities`[\s\S]*Do not reload or require lifecycle tools/);
-  assert.match(guide, /Zero lifecycle tools is not itself a canvas failure/);
-  assert.match(guide, /api_tool\.list_resources[\s\S]*extensions_reload[\s\S]*extensions_manage/);
-  assert.match(guide, /Only reload if the provider is unavailable and `extensions_reload` was actually discovered/);
-  assert.match(guide, /user must review and accept[\s\S]*Never accept on their behalf or bypass the trust gate/);
-  assert.match(guide, /`list_canvas_capabilities`[\s\S]*`open_canvas`[\s\S]*`get_session`[\s\S]*`bind_session`/);
-  assert.match(guide, /Read `get_state` again to confirm registration/);
+test("startup has no separate bootstrap document or runtime dependency on one", async () => {
+  assert.equal(RUNTIME_FILES.includes("BOOTSTRAP.md"), false);
+  await assert.rejects(access(new URL("BOOTSTRAP.md", import.meta.url)), { code: "ENOENT" });
 });
 
 for (const status of [403, 404]) {
@@ -168,13 +166,13 @@ for (const status of [403, 404]) {
   });
 }
 
-for (const failure of ["missing published guide", "invalid published hash", "inherited runtime mismatch"]) {
+for (const failure of ["missing published startup module", "invalid published hash", "inherited runtime mismatch"]) {
   test(`${failure} cannot satisfy the inherited-runtime readiness gate`, async (t) => {
     const h = await harness(t);
     h.source.api = async (method, path, body) => {
       const result = await h.api(method, path, body);
       if (path === `repos/${TEMPLATE}/contents/.github/extensions/demo-launcher?ref=${h.remote.templateSha}`) {
-        if (failure === "missing published guide") return result.filter(({ path }) => !path.endsWith("/BOOTSTRAP.md"));
+        if (failure === "missing published startup module") return result.filter(({ path }) => !path.endsWith("/startup.mjs"));
         if (failure === "invalid published hash") result[0].sha = "";
       }
       if (failure === "inherited runtime mismatch" && path.includes("/contents/.github/extensions/demo-launcher?ref=base-sha")) {
@@ -255,7 +253,10 @@ test("legacy personal receipts still route cleanup to the original source and cr
   environment.repo = `presenter/${environment.name}`;
   delete environment.createdBy;
   delete environment.sourceRepo;
+  delete environment.visibility;
   h.remote.repository.full_name = environment.repo;
+  h.remote.repository.visibility = "public";
+  h.remote.repository.private = false;
   await h.store.write(state);
   await h.link();
   await h.controller.cleanup(confirmation(await h.current()));
@@ -278,7 +279,7 @@ test("a changed demo default branch cannot redirect runtime verification", async
   assert.equal(h.calls.filter(({ path }) => path.endsWith("/merges")).length, 0);
 });
 
-for (const failure of ["missing file", "missing bootstrap guide", "wrong contents", "symlink", "permission error"]) {
+for (const failure of ["missing file", "missing startup module", "wrong contents", "symlink", "permission error"]) {
   test(`launcher readback rejects ${failure} instead of advertising a ready canvas`, async (t) => {
     const h = await harness(t);
     h.source.api = async (method, path, body) => {
@@ -286,7 +287,7 @@ for (const failure of ["missing file", "missing bootstrap guide", "wrong content
       if (!path.includes("/contents/.github/extensions/demo-launcher?ref=base-sha")) return result;
       if (failure === "permission error") throw new GitHubError("Forbidden to read published files", 403);
       if (failure === "missing file") return result.slice(1);
-      if (failure === "missing bootstrap guide") return result.filter(({ path }) => !path.endsWith("/BOOTSTRAP.md"));
+      if (failure === "missing startup module") return result.filter(({ path }) => !path.endsWith("/startup.mjs"));
       if (failure === "wrong contents") result[0].sha = "not-the-uploaded-file";
       if (failure === "symlink") result[0].type = "symlink";
       return result;

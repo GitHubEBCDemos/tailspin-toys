@@ -21,7 +21,7 @@ test("creates unique repository names with no name or approval input", async (t)
   }
 });
 
-test("creates isolated public environment, configures CodeQL before PR, and never merges canvas setup", async (t) => {
+test("creates an internal environment without public exposure, configures CodeQL before PR, and never merges canvas setup", async (t) => {
   const h = await harness(t);
   h.remote.initializationDelays = 2;
   const created = await h.create();
@@ -30,18 +30,24 @@ test("creates isolated public environment, configures CodeQL before PR, and neve
   assert.equal(environment.repo, `${DEMO_OWNER}/${environment.name}`);
   assert.equal(environment.prNumber, 1);
   assert.equal(environment.sessionId, undefined);
-  assert.equal(h.remote.repository.private, false);
+  assert.equal(environment.visibility, "internal");
+  assert.equal(h.remote.repository.visibility, "internal");
+  assert.equal(h.remote.repository.private, true);
   assert.equal(h.remote.fixture, Buffer.from(FIXTURE).toString("base64"));
   const writes = h.calls.filter((call) => call.method !== "GET");
-  assert.deepEqual(writes.slice(0, 5).map((call) => call.method), ["POST", "PATCH", "POST", "PUT", "POST"]);
+  assert.deepEqual(writes.slice(0, 6).map((call) => call.method), ["POST", "PATCH", "PATCH", "POST", "PUT", "POST"]);
   assert.equal(writes.filter((call) => call.path.endsWith("/pulls")).length, 3);
   assert.equal(writes.filter((call) => call.path.endsWith("/issues")).length, 1);
   assert.ok(writes.every((call) => !call.body?.branch || call.body.branch.startsWith("demo/")));
   assert.equal(writes[0].path, `repos/${TEMPLATE}/generate`);
   assert.equal(writes[0].body.owner, DEMO_OWNER);
-  assert.equal(writes[2].body.ref, `refs/heads/${BRANCH}`);
-  assert.equal(writes[3].body.branch, BRANCH);
-  assert.ok(writes[4].body.body.includes("never merge or deploy"));
+  assert.equal(writes[0].body.private, true);
+  assert.equal(writes[1].path, `repos/${environment.repo}`);
+  assert.deepEqual(writes[1].body, { visibility: "internal" });
+  assert.equal(writes[2].path, `repos/${environment.repo}/code-scanning/default-setup`);
+  assert.equal(writes[3].body.ref, `refs/heads/${BRANCH}`);
+  assert.equal(writes[4].body.branch, BRANCH);
+  assert.ok(writes[5].body.body.includes("never merge or deploy"));
   assert.equal(h.messages.length, 0);
   assert.equal(environment.launcherReady, true);
   assert.equal(environment.launcherVerifiedCommit, h.remote.mainSha);
@@ -50,6 +56,76 @@ test("creates isolated public environment, configures CodeQL before PR, and neve
   assert.deepEqual((await h.source.state()).environments, []);
   assert.doesNotMatch(FIXTURE, /\.listen\s*\(/);
   assert.match(FIXTURE, /searchParams\.get/);
+});
+
+for (const status of [403, 422]) {
+  test(`internal visibility HTTP ${status} stops creation before CodeQL, fixtures, or launch`, async (t) => {
+    const h = await harness(t);
+    h.remote.failure = (method, _path, body) => method === "PATCH" && body?.visibility === "internal"
+      ? new GitHubError(`Internal visibility unavailable (${status})`, status) : null;
+    await assert.rejects(h.create(), /Internal visibility unavailable/);
+    const environment = await h.current();
+    assert.equal(environment.visibility, "internal");
+    assert.equal(environment.repositoryId, h.remote.repository.id);
+    assert.equal(h.remote.repository.visibility, "private");
+    assert.equal(h.remote.repository.private, true);
+    assert.equal(environment.githubReady, false);
+    assert.equal(environment.launcherReady, undefined);
+    assert.match(environment.error, /Internal visibility unavailable/);
+    assert.equal(h.calls.some(({ path }) => path.includes("/code-scanning/")), false);
+    assert.equal(h.remote.pulls.length, 0);
+    assert.deepEqual(h.calls.filter(({ method }) => method !== "GET").map(({ body }) => body.private ?? body.visibility), [true, "internal"]);
+  });
+}
+
+for (const visibility of ["private", "public", undefined]) {
+  test(`unconfirmed internal visibility (${visibility}) cannot satisfy provisioning`, async (t) => {
+    const h = await harness(t);
+    h.source.api = async (method, path, body) => {
+      const result = await h.api(method, path, body);
+      if (method === "PATCH" && body?.visibility === "internal") {
+        h.remote.repository.visibility = visibility;
+        h.remote.repository.private = visibility !== "public";
+      }
+      return result;
+    };
+    await assert.rejects(h.create(), /visibility must be internal/);
+    assert.equal(h.calls.some(({ path }) => path.includes("/code-scanning/")), false);
+    assert.equal((await h.current()).launcherReady, undefined);
+    assert.equal(h.remote.pulls.length, 0);
+  });
+}
+
+test("a lost visibility response is recoverable without recreating the repository or repeating the visibility update", async (t) => {
+  const h = await harness(t);
+  h.source.api = async (method, path, body) => {
+    const result = await h.api(method, path, body);
+    if (method === "PATCH" && body?.visibility === "internal") throw new Error("Lost visibility response");
+    return result;
+  };
+  await assert.rejects(h.create(), /Lost visibility response/);
+  const environment = await h.current();
+  assert.equal(environment.repositoryId, h.remote.repository.id);
+  assert.equal(h.remote.repository.visibility, "internal");
+  await provision(environment, { api: h.api, save: async () => {} });
+  assert.equal(environment.githubReady, true);
+  assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 1);
+  assert.equal(h.calls.filter(({ body }) => body?.visibility === "internal").length, 1);
+});
+
+test("legacy public demo receipts remain usable without changing their visibility", async (t) => {
+  const h = await harness(t);
+  await h.create();
+  const state = await h.store.read();
+  delete state.environments[0].visibility;
+  h.remote.repository.visibility = "public";
+  h.remote.repository.private = false;
+  await h.store.write(state);
+  const updates = h.calls.filter(({ body }) => body?.visibility).length;
+  await h.link();
+  await h.controller.refresh();
+  assert.equal(h.remote.repository.visibility, "public");
+  assert.equal(h.calls.filter(({ body }) => body?.visibility).length, updates);
 });
 
 test("refuses to adopt another repo and preserves a recoverable receipt", async (t) => {
@@ -177,7 +253,7 @@ test("CodeQL setup validation must succeed before creating a security branch or 
   h.remote.setupRun = { status: "completed", conclusion: "success" };
   await h.create();
   assert.equal(h.remote.pulls.length, 3);
-  assert.equal(h.calls.filter((call) => call.method === "PATCH").length, 3);
+  assert.equal(h.calls.filter(({ method, path }) => method === "PATCH" && path.endsWith("/code-scanning/default-setup")).length, 3);
 });
 
 test("CodeQL setup retries a newly created run's 404 and waits for successful validation", async (t) => {
@@ -199,7 +275,7 @@ test("CodeQL setup retries a newly created run's 404 and waits for successful va
   const created = await h.create();
   assert.equal(waits, 3);
   assert.equal(h.calls.filter(({ path }) => path.endsWith("/actions/runs/42")).length, 4);
-  assert.equal(h.calls.filter(({ method }) => method === "PATCH").length, 1);
+  assert.equal(h.calls.filter(({ method, path }) => method === "PATCH" && path.endsWith("/code-scanning/default-setup")).length, 1);
   assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 1);
   assert.equal((await h.store.read()).environments.length, 1);
   assert.equal((await h.current()).setupRunPath, null);
@@ -217,7 +293,7 @@ test("a persistently missing CodeQL setup run times out without seeding or launc
   await assert.rejects(h.create(), /CodeQL setup validation is not ready yet/);
   assert.equal(waits, 24);
   assert.equal(h.calls.filter(({ path }) => path.endsWith("/actions/runs/42")).length, 24);
-  assert.equal(h.calls.filter(({ method }) => method === "PATCH").length, 1);
+  assert.equal(h.calls.filter(({ method, path }) => method === "PATCH" && path.endsWith("/code-scanning/default-setup")).length, 1);
   assert.equal(h.remote.branch, null);
   assert.equal(h.remote.pulls.length, 0);
   const environment = await h.current();
@@ -280,7 +356,7 @@ for (const delays of [2, 24]) {
       assert.equal((await h.current()).launcherReady, true);
     }
     assert.equal(waits, delays);
-    assert.equal(h.calls.filter(({ method }) => method === "PATCH").length, 1);
+    assert.equal(h.calls.filter(({ method, path }) => method === "PATCH" && path.endsWith("/code-scanning/default-setup")).length, 1);
     assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 1);
   });
 }
@@ -295,14 +371,14 @@ test("CodeQL waits for template language indexing and records a failed attempt o
   await h.create();
   assert.equal((await h.current()).launcherReady, true);
   assert.equal(h.calls.filter(({ path }) => path.endsWith("/generate")).length, 2);
-  assert.equal(h.calls.filter(({ method }) => method === "PATCH").length, 27);
+  assert.equal(h.calls.filter(({ method, path }) => method === "PATCH" && path.endsWith("/code-scanning/default-setup")).length, 27);
 });
 
 test("unrelated CodeQL validation errors are not retried as language-indexing delays", async (t) => {
   const h = await harness(t);
-  h.remote.failure = (method) => method === "PATCH" ? new GitHubError("Invalid runner configuration", 422) : null;
+  h.remote.failure = (method, path) => method === "PATCH" && path.endsWith("/code-scanning/default-setup") ? new GitHubError("Invalid runner configuration", 422) : null;
   await assert.rejects(h.create(), /Invalid runner configuration/);
-  assert.equal(h.calls.filter(({ method }) => method === "PATCH").length, 1);
+  assert.equal(h.calls.filter(({ method, path }) => method === "PATCH" && path.endsWith("/code-scanning/default-setup")).length, 1);
 });
 
 test("seeded PR preserves template headings, comments and checklist items", async () => {

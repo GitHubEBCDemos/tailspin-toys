@@ -38,7 +38,19 @@ function assertSessionLaunch(href, repo) {
   return target;
 }
 
-test("Create only provisions; one explicit Open session action launches the pinned demo", async (t) => {
+test("an outdated public-repository provider cannot expose Create in the updated canvas", async (t) => {
+  const h = await harness(t);
+  const state = h.source.state.bind(h.source);
+  h.source.state = async () => ({ ...await state(), interfaceVersion: 5 });
+  const { page, url } = await canvas(t, h.source);
+  await page.goto(url);
+  await expect(page.getByRole("alert")).toContainText("Reload extensions or restart this session");
+  await expect(page.getByTestId("create-environment")).toBeHidden();
+  await expect(page.getByTestId("open-app")).toBeHidden();
+  assert.equal(h.calls.length, 0);
+});
+
+test("Create only provisions; one explicit Open session action launches the verified demo", async (t) => {
   const h = await harness(t);
   const { page, context, url } = await canvas(t, h.source);
   await page.goto(url);
@@ -46,6 +58,7 @@ test("Create only provisions; one explicit Open session action launches the pinn
   await expect(page.getByTestId("create-environment")).toHaveText("Create");
   await expect(page.getByTestId("demo-org-link")).toHaveAttribute("href", "https://github.com/GitHubEBCDemos");
   await expect(page.getByTestId("template-link")).toHaveAttribute("href", "https://github.com/GitHubEBCDemos/tailspin-toys");
+  await expect(page.locator(".hint").first()).toContainText("internal repo");
   await expect(page.getByTestId("resume-setup")).toHaveCount(0);
   await expect(page.locator("#demos")).toBeHidden();
   await expect(page.getByTestId("cleanup")).toBeHidden();
@@ -76,10 +89,10 @@ test("Create only provisions; one explicit Open session action launches the pinn
   assert.equal(target.searchParams.get("repo"), (await h.current()).repo);
   assert.match(target.searchParams.get("repo"), /^GitHubEBCDemos\/tailspin-demo-/);
   assert.equal(target.searchParams.get("branch"), "main");
-  assert.match(target.searchParams.get("prompt"), /Open the Copilot demos canvas/);
-  assert.doesNotMatch(target.searchParams.get("prompt"), /extensions_reload|extensions_manage/);
-  assert.match(target.searchParams.get("prompt"), /BOOTSTRAP\.md from that commit using git show/);
-  assert.ok(target.searchParams.get("prompt").length <= 750);
+  assert.match(target.searchParams.get("prompt"), /Open or focus the Copilot demos canvas/);
+  assert.match(target.searchParams.get("prompt"), /get_state[\s\S]*get_session[\s\S]*bind_session/);
+  assert.doesNotMatch(target.searchParams.get("prompt"), /extensions_reload|extensions_manage|BOOTSTRAP|git show|fetch|Expected origin|verified commit/);
+  assert.ok(target.searchParams.get("prompt").length <= 350);
   assert.equal(h.messages.length, 0);
   await expect(page.locator("#demos")).toBeHidden();
   await expect(page.locator("#environment-info")).toBeVisible();
@@ -103,7 +116,7 @@ test("Create only provisions; one explicit Open session action launches the pinn
 
 test("Create starts fresh after failure and exposes Open session only after provisioning", async (t) => {
   const h = await harness(t);
-  h.remote.failure = (method) => method === "PATCH" ? new GitHubError("Forbidden: enable code scanning", 403) : null;
+  h.remote.failure = (method, path) => method === "PATCH" && path.endsWith("/code-scanning/default-setup") ? new GitHubError("Forbidden: enable code scanning", 403) : null;
   const { page, context, url } = await canvas(t, h.source);
   await page.goto(url);
   await page.getByTestId("create-environment").click();

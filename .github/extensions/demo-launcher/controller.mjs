@@ -137,7 +137,7 @@ export class Controller {
         ...item, launchUrl: item.launcherReady && !item.cleanup ? launchUrl(item) : null,
       })),
       context: { repo: this.repo, sessionId: this.sessionId(), kind: this.isSource ? "source" : environment ? "demo" : "unrecognized" },
-      interfaceVersion: 5,
+      interfaceVersion: 6,
     };
   }
 
@@ -196,7 +196,7 @@ export class Controller {
         const createdAt = new Date().toISOString();
         const name = `tailspin-demo-${createdAt.slice(0, 10)}-${id.slice(0, 8)}`;
         environment = {
-          id, name, owner: DEMO_OWNER, createdBy: user.login, repo: `${DEMO_OWNER}/${name}`,
+          id, name, owner: DEMO_OWNER, createdBy: user.login, repo: `${DEMO_OWNER}/${name}`, visibility: "internal",
           createdAt, step: "Starting", githubReady: false, sourceRepo: this.repo, sourceSessionId: this.sessionId(),
         };
         state.environments.push(environment);

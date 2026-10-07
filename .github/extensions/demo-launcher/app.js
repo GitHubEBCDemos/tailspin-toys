@@ -41,7 +41,7 @@ function showError(message) {
 
 function render() {
   if (!state) return;
-  if (state.interfaceVersion !== 5) {
+  if (state.interfaceVersion !== 6) {
     element("setup").hidden = true;
     element("demos").hidden = true;
     element("cleanup-section").hidden = true;

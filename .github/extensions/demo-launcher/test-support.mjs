@@ -39,7 +39,7 @@ export async function harness(t) {
       return remote.templateFiles.map((file) => ({ ...file }));
     }
     if (method === "POST" && path === `repos/${TEMPLATE}/generate`) {
-      remote.repository = { id: 101, full_name: `${body.owner}/${body.name}`, description: body.description, default_branch: "main", private: body.private, fork: false };
+      remote.repository = { id: 101, full_name: `${body.owner}/${body.name}`, description: body.description, default_branch: "main", private: body.private, visibility: body.private ? "private" : "public", fork: false };
       remote.branch = null;
       remote.fixture = null;
       remote.configured = false;
@@ -55,6 +55,12 @@ export async function harness(t) {
     const prefix = `repos/${remote.repository?.full_name || "presenter/demo-fresh"}`;
     if (method === "GET" && path === prefix) {
       if (!remote.repository) throw new GitHubError("Not found", 404);
+      return remote.repository;
+    }
+    if (method === "PATCH" && path === prefix) {
+      if (body.visibility !== "internal") throw new Error("Expected an internal visibility update.");
+      remote.repository.visibility = body.visibility;
+      remote.repository.private = body.visibility !== "public";
       return remote.repository;
     }
     if (method === "DELETE" && path === prefix) {

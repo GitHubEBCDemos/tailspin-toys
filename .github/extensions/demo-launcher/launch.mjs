@@ -2,7 +2,7 @@ import { assertOwnedRepository, TEMPLATE } from "./github.mjs";
 
 export const RUNTIME_FILES = [
   "extension.mjs", "controller.mjs", "github.mjs", "scenarios.mjs", "server.mjs",
-  "workspace.mjs", "launch.mjs", "startup.mjs", "app.js", "index.html", "style.css", "BOOTSTRAP.md",
+  "workspace.mjs", "launch.mjs", "startup.mjs", "app.js", "index.html", "style.css",
 ];
 const runtimeDirectory = ".github/extensions/demo-launcher";
 
@@ -10,9 +10,7 @@ export function launchUrl(environment) {
   // Existing receipts pin the default-branch commit under the former merge field.
   const verifiedCommit = environment.launcherVerifiedCommit || environment.launcherMergeCommit;
   if (!environment.launcherReady || !verifiedCommit) return null;
-  const prompt = `Open the Copilot demos canvas.
-Expected origin: ${environment.repo}; default branch: ${environment.defaultBranch}; verified commit: ${verifiedCommit}.
-Read .github/extensions/demo-launcher/BOOTSTRAP.md from that commit using git show (fetch origin ${environment.defaultBranch} only if needed), then follow it to verify, open, and bind the existing canvas. Do not rewrite extension files or reload a working provider.`;
+  const prompt = "Open or focus the Copilot demos canvas using instance ID demo-session-panel. Read get_state, verify its session with get_session, then call bind_session with the verified repository, project ID, session ID, and name. If the canvas is unavailable, report that and stop; do not modify extension files or reload extensions.";
   const values = { repo: environment.repo, branch: environment.defaultBranch, mode: "interactive", prompt };
   const query = Object.entries(values).map(([key, value]) => `${key}=${encodeURIComponent(value)}`).join("&");
   return `https://github.com/copilot/app/launch?open=${encodeURIComponent(`ghapp://session/new?${query}`)}`;

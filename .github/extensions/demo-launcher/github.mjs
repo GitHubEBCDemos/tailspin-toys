@@ -67,13 +67,17 @@ export function isSourceRepository(repo) {
   return SOURCE_REPOSITORIES.some((source) => source.toLowerCase() === repo.toLowerCase());
 }
 
-export function assertOwnedRepository(environment, repository) {
+export function assertOwnedRepository(environment, repository, visibility = environment.visibility || "public") {
   if (repository.full_name.toLowerCase() !== environment.repo.toLowerCase() ||
       isSourceRepository(repository.full_name) ||
       repository.description !== `Disposable Copilot demo [${environment.id}]` ||
-      repository.private || repository.fork ||
+      repository.fork ||
       (environment.repositoryId && repository.id !== environment.repositoryId)) {
     throw new Error("Repository identity does not match this demo's receipt. Refusing to change it.");
+  }
+  const actualVisibility = repository.visibility || (repository.private ? "private" : "public");
+  if (actualVisibility !== visibility) {
+    throw new Error(`Repository visibility must be ${visibility} for this demo; received ${actualVisibility}. Refusing to change it.`);
   }
 }
 
@@ -123,14 +127,23 @@ export async function provision(environment, { api, save, sleep = (ms) => new Pr
   let repository = await optional(api, prefix);
   if (!repository) {
     if (environment.repositoryId) throw new Error("The recorded repository is missing or inaccessible. It will not be recreated automatically.");
-    await checkpoint("Creating public template repository");
+    await checkpoint("Creating private template repository");
     repository = await api("POST", `repos/${TEMPLATE}/generate`, {
       owner: environment.owner,
       name: environment.name,
-      private: false,
+      private: true,
       include_all_branches: false,
       description: `Disposable Copilot demo [${environment.id}]`,
     });
+  }
+  if (environment.visibility === "internal" && repository.visibility !== "internal") {
+    assertOwnedRepository(environment, repository, "private");
+    environment.repositoryId = repository.id;
+    environment.defaultBranch = repository.default_branch;
+    await checkpoint("Setting internal repository visibility");
+    // Template generation only supports public/private; never expose a new demo publicly.
+    await api("PATCH", prefix, { visibility: "internal" });
+    repository = await api("GET", prefix);
   }
   assertOwnedRepository(environment, repository);
   environment.repositoryId = repository.id;

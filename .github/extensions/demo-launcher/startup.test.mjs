@@ -110,12 +110,12 @@ test("startup checks the pinned runtime read-only in the actual worktree", async
 for (const failure of ["origin", "unverified", "edited file", "missing file", "tracked deletion", "symlink"]) {
   test(`startup rejects ${failure} before opening a canvas`, async (t) => {
     const h = await worktree(t);
-    const file = join(h.runtime, "BOOTSTRAP.md");
+    const file = join(h.runtime, "startup.mjs");
     if (failure === "origin") h.environment.repo = "GitHubEBCDemos/another-demo";
     if (failure === "unverified") h.environment.launcherReady = false;
     if (failure === "edited file") await writeFile(file, "Changed runtime");
     if (failure === "missing file") await unlink(file);
-    if (failure === "tracked deletion") await h.git("rm", "--cached", "--quiet", "--", ".github/extensions/demo-launcher/BOOTSTRAP.md");
+    if (failure === "tracked deletion") await h.git("rm", "--cached", "--quiet", "--", ".github/extensions/demo-launcher/startup.mjs");
     if (failure === "symlink") {
       await unlink(file);
       await symlink(join(h.runtime, "index.html"), file);
